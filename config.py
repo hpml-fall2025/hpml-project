@@ -4,9 +4,9 @@ Configuration file for 5-minute Realized Variance Prediction System.
 
 TICKER = "AAPL"
 
-TARGET_DATE = "2024-01-15"
+TARGET_DATE = "2025-10-31"
 
-LOOKBACK_DAYS = 60
+LOOKBACK_DAYS = 50
 
 INTERVAL = "5m"
 

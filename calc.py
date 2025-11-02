@@ -10,42 +10,17 @@ from typing import Dict, Optional
 
 
 def calculate_log_returns(prices: pd.Series) -> pd.Series:
-    """
-    Calculate log returns from price series.
-    
-    Args:
-        prices: Series of prices
-        
-    Returns:
-        Series of log returns (log(P_t / P_{t-1}))
-    """
+    """Calculate log returns: log(P_t / P_{t-1})."""
     return np.log(prices / prices.shift(1))
 
 
 def calculate_realized_variance(returns: pd.Series) -> float:
-    """
-    Calculate realized variance as sum of squared returns.
-    
-    Args:
-        returns: Series of log returns
-        
-    Returns:
-        Realized variance (sum of squared returns)
-    """
+    """Calculate realized variance as sum of squared returns."""
     return (returns ** 2).sum()
 
 
 def calculate_rv_components(data: pd.DataFrame, current_idx: int) -> Optional[Dict[str, float]]:
-    """
-    Calculate cascading RV components (5min, hourly, daily) up to current index.
-    
-    Args:
-        data: DataFrame with Close prices
-        current_idx: Current position index (exclusive - data before this point is used)
-        
-    Returns:
-        Dictionary with rv_5min, rv_hourly, rv_daily or None if insufficient data
-    """
+    """Calculate cascading RV components (5min, hourly, daily) up to current index."""
     if current_idx < 78:
         return None
     
@@ -69,16 +44,7 @@ def calculate_rv_components(data: pd.DataFrame, current_idx: int) -> Optional[Di
 
 
 def prepare_training_data(data: pd.DataFrame, target_date: str) -> pd.DataFrame:
-    """
-    Prepare training dataset using all data before target date.
-    
-    Args:
-        data: Full historical DataFrame
-        target_date: Target date string (YYYY-MM-DD)
-        
-    Returns:
-        DataFrame with columns: rv_5min, rv_hourly, rv_daily, rv_next
-    """
+    """Prepare training dataset using all data before target date."""
     target_dt = datetime.strptime(target_date, "%Y-%m-%d")
     
     training_data = data[data.index.date < target_dt.date()].copy()
@@ -118,17 +84,7 @@ def prepare_training_data(data: pd.DataFrame, target_date: str) -> pd.DataFrame:
 
 
 def fit_har_model(training_data: pd.DataFrame) -> LinearRegression:
-    """
-    Fit HAR-RV model using OLS regression.
-    
-    Model: RV(t+1) = β₀ + β₁·RV_5min + β₂·RV_hourly + β₃·RV_daily + ε
-    
-    Args:
-        training_data: DataFrame with features and target (rv_next)
-        
-    Returns:
-        Fitted LinearRegression model
-    """
+    """Fit HAR-RV model using OLS regression."""
     X = training_data[['rv_5min', 'rv_hourly', 'rv_daily']].values
     y = training_data['rv_next'].values
     
@@ -145,16 +101,7 @@ def fit_har_model(training_data: pd.DataFrame) -> LinearRegression:
 
 
 def simulate_streaming(data: pd.DataFrame, target_date: str) -> pd.DataFrame:
-    """
-    Simulate streaming predictions for target date.
-    
-    Args:
-        data: Full historical DataFrame including target date
-        target_date: Target date string (YYYY-MM-DD)
-        
-    Returns:
-        DataFrame with columns: timestamp, predicted_rv, actual_rv
-    """
+    """Simulate streaming predictions for target date."""
     print("Preparing training data...")
     training_data = prepare_training_data(data, target_date)
     

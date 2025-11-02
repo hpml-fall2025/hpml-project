@@ -9,22 +9,7 @@ import pytz
 
 
 def get_historical_data(ticker: str, target_date: str, lookback_days: int) -> pd.DataFrame:
-    """
-    Fetch historical 5-minute stock data using yfinance.
-    
-    Args:
-        ticker: Stock symbol (e.g., "AAPL")
-        target_date: Target date to simulate in YYYY-MM-DD format
-        lookback_days: Number of days of history to fetch
-        
-    Returns:
-        DataFrame with columns: Open, High, Low, Close, Volume
-        Index: timestamp (datetime, timezone-aware EST)
-        
-    Raises:
-        ValueError: If data is insufficient or target_date is invalid
-        Exception: If yfinance fetch fails
-    """
+    """Fetch historical 5-minute stock data using yfinance."""
     try:
         target_dt = datetime.strptime(target_date, "%Y-%m-%d")
         
@@ -63,15 +48,7 @@ def get_historical_data(ticker: str, target_date: str, lookback_days: int) -> pd
 
 
 def _filter_market_hours(data: pd.DataFrame) -> pd.DataFrame:
-    """
-    Filter data to regular US market hours (9:30 AM - 4:00 PM EST).
-    
-    Args:
-        data: Raw DataFrame from yfinance
-        
-    Returns:
-        Filtered DataFrame with only market hours data
-    """
+    """Filter data to regular US market hours (9:30 AM - 4:00 PM EST)."""
     est = pytz.timezone('America/New_York')
     
     if data.index.tz is None:
@@ -89,16 +66,7 @@ def _filter_market_hours(data: pd.DataFrame) -> pd.DataFrame:
 
 
 def _validate_data(data: pd.DataFrame, target_date: str) -> None:
-    """
-    Validate fetched data for completeness and quality.
-    
-    Args:
-        data: DataFrame to validate
-        target_date: Target date string in YYYY-MM-DD format
-        
-    Raises:
-        ValueError: If data is insufficient or invalid
-    """
+    """Validate fetched data for completeness and quality."""
     if len(data) == 0:
         raise ValueError("No data available after filtering to market hours")
     

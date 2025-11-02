@@ -7,12 +7,7 @@ import numpy as np
 
 
 def output_results(predictions: pd.DataFrame) -> None:
-    """
-    Display prediction results with formatted table and summary statistics.
-    
-    Args:
-        predictions: DataFrame with columns: timestamp, predicted_rv, actual_rv
-    """
+    """Display prediction results with formatted table and summary statistics."""
     if len(predictions) == 0:
         print("No predictions to display")
         return
@@ -27,12 +22,7 @@ def output_results(predictions: pd.DataFrame) -> None:
 
 
 def _print_predictions_table(predictions: pd.DataFrame) -> None:
-    """
-    Print formatted table of predictions.
-    
-    Args:
-        predictions: DataFrame with predictions and calculated errors
-    """
+    """Print formatted table of predictions."""
     print("\n" + "=" * 80)
     print("5-Minute Realized Variance Predictions")
     print("=" * 80)
@@ -51,12 +41,7 @@ def _print_predictions_table(predictions: pd.DataFrame) -> None:
 
 
 def _print_summary_statistics(predictions: pd.DataFrame) -> None:
-    """
-    Print summary statistics for predictions.
-    
-    Args:
-        predictions: DataFrame with predictions and calculated errors
-    """
+    """Print summary statistics for predictions."""
     total_predictions = len(predictions)
     
     mean_abs_pct_error = predictions['pct_error'].mean()

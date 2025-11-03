@@ -49,13 +49,14 @@ def prepare_training_data(data: pd.DataFrame, target_date: str) -> pd.DataFrame:
     
     training_data = data[data.index.date < target_dt.date()].copy()
     
-    if len(training_data) < 80:
+    if len(training_data) < 78:
         raise ValueError(
             f"Insufficient training data: {len(training_data)} bars available, "
-            f"need at least 80 bars"
+            f"need at least 78 bars (1 day)"
         )
     
     training_records = []
+    print(training_data)
     
     for i in range(78, len(training_data) - 1):
         components = calculate_rv_components(training_data, i)

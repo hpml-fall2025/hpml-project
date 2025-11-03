@@ -2,11 +2,11 @@
 Configuration file for 5-minute Realized Variance Prediction System.
 """
 
-TICKER = "AAPL"
+TICKER = "SPY"
 
 TARGET_DATE = "2025-10-31"
 
-LOOKBACK_DAYS = 50
+LOOKBACK_DAYS = 1
 
 INTERVAL = "5m"
 
@@ -17,5 +17,5 @@ MARKET_CLOSE = "16:00"
 
 BARS_PER_DAY = 78
 
-MIN_TRAINING_DAYS = 20
+MIN_TRAINING_DAYS = 0
 

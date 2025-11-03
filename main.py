@@ -29,7 +29,7 @@ def main() -> None:
         print(f"Step 2: Simulating streaming predictions for {TARGET_DATE}...")
         predictions = calc.simulate_streaming(data, TARGET_DATE)
         print(f"Predictions complete\n")
-        
+        return
         print("Step 3: Displaying results...")
         produce.output_results(predictions)
         print("Pipeline complete")
@@ -41,6 +41,40 @@ def main() -> None:
     except Exception as e:
         print(f"\nUnexpected Error: {str(e)}", file=sys.stderr)
         sys.exit(1)
+
+
+# def main() -> None:
+#     """Execute the HAR-RV prediction pipeline."""
+#     try:
+#         print("=" * 80)
+#         print("5-Minute Realized Variance Prediction System")
+#         print("HAR-RV Model with Simulated Streaming Architecture")
+#         print("=" * 80)
+#         print(f"\nConfiguration:")
+#         print(f"  Ticker:       {TICKER}")
+#         print(f"  Target Date:  {TARGET_DATE}")
+#         print(f"  Lookback:     {LOOKBACK_DAYS} days")
+#         print()
+        
+#         print(f"Step 1: Fetching historical data for {TICKER}...")
+#         data = pull.get_historical_data(TICKER, TARGET_DATE, LOOKBACK_DAYS)
+#         print(f"Data fetch complete\n")
+        
+#         print(f"Step 2: Simulating streaming predictions for {TARGET_DATE}...")
+#         predictions = calc.simulate_streaming(data, TARGET_DATE)
+#         print(f"Predictions complete\n")
+#         return
+#         print("Step 3: Displaying results...")
+#         produce.output_results(predictions)
+#         print("Pipeline complete")
+        
+#     except ValueError as e:
+#         print(f"\nValidation Error: {str(e)}", file=sys.stderr)
+#         sys.exit(1)
+        
+#     except Exception as e:
+#         print(f"\nUnexpected Error: {str(e)}", file=sys.stderr)
+#         sys.exit(1)
 
 
 if __name__ == "__main__":

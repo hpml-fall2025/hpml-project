@@ -6,29 +6,29 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 import pytz
+from typing import List
 
 
-def get_historical_data(ticker: str, target_date: str, lookback_days: int) -> pd.DataFrame:
+def get_historical_data(ticker: str, data_interval: List[str], time_interval: str) -> pd.DataFrame:
     """Fetch historical 5-minute stock data using yfinance."""
     try:
-        target_dt = datetime.strptime(target_date, "%Y-%m-%d")
+        start_date = datetime.strptime(data_interval[0], "%Y-%m-%d") - timedelta(days = 7)
         
-        start_date = target_dt - timedelta(days=lookback_days)
-        end_date = target_dt + timedelta(days=1)
+        end_date = datetime.strptime(data_interval[1], "%Y-%m-%d") + timedelta(days = 1)
         
-        print(f"Fetching {ticker} data from {start_date.date()} to {target_dt.date()}...")
+        print(f"Fetching {ticker} data from {start_date.date()} up to {end_date.date()}...")
         
         ticker_obj = yf.Ticker(ticker)
         data = ticker_obj.history(
             start=start_date.strftime("%Y-%m-%d"),
             end=end_date.strftime("%Y-%m-%d"),
-            interval="5m"
+            interval=time_interval
         )
         
         if data.empty:
             raise ValueError(f"No available data returned from yfinance for {ticker}")
-                
-        _validate_data(data, target_date)
+        
+        _validate_data(data)
         
         data = data.sort_index()
         
@@ -43,34 +43,10 @@ def get_historical_data(ticker: str, target_date: str, lookback_days: int) -> pd
 
 
 
-def _validate_data(data: pd.DataFrame, target_date: str) -> None:
+def _validate_data(data: pd.DataFrame) -> None:
     """Validate fetched data for completeness and quality."""
     if len(data) == 0:
         raise ValueError("No data available after filtering to market hours")
-    
-    target_dt = datetime.strptime(target_date, "%Y-%m-%d")
-    target_data = data[data.index.date == target_dt.date()]
-    
-    if len(target_data) == 0:
-        raise ValueError(
-            f"Target date {target_date} has no data. "
-            f"It may be a weekend, holiday, or outside the available data range."
-        )
-    
-    if len(target_data) < 50:
-        print(
-            f"Warning: Target date has only {len(target_data)} bars "
-            f"(expected ~78 for a full trading day)"
-        )
-    
-    unique_dates = pd.unique(data.index.date)
-    num_trading_days = len(unique_dates)
-    
-    if num_trading_days < 20:
-        print(
-            f"Warning: Only {num_trading_days} trading days available. "
-            f"Minimum 20 recommended for model training."
-        )
     
     if data[['Open', 'High', 'Low', 'Close', 'Volume']].isnull().any().any():
         print("Warning: Data contains missing values in OHLCV columns")

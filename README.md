@@ -1,37 +1,34 @@
-# FinBERT-CNN Volatility Forecasting
+# FinBERT Sentiment-Driven Volatility Forecasting
 
-Implementation of CNN-based volatility forecasting using FinBERT embeddings, based on the paper "Realised Volatility Forecasting: Machine Learning via Financial Word Embedding" (Rahimikia et al., 2024).
+High-performance ML pipeline combining sentiment analysis of financial news with realized volatility forecasting.
 
-## Architecture
+## Overview
 
-```
-Headline Text → FinBERT Embeddings → CNN (1,2,3-grams) → Max Pool → FCNN → RV Prediction
-```
+This project implements a sentiment-driven volatility forecasting system with two main components:
 
-**Key Features:**
-- FinBERT for financial-domain embeddings (frozen)
-- Multi-filter CNN capturing unigram, bigram, trigram patterns
-- Global max pooling for feature extraction
-- Fully connected layers for regression
-- MSE loss with L2 regularization
+1. **FinBERT**: Fine-tuned BERT model for financial sentiment analysis (continuous scores)
+2. **Alpha Network** (Phase 2): Learned weighting mechanism to combine sentiment signals with HAR-RV volatility forecasts
 
 ## Project Structure
 
 ```
-project/
-├── config.py           # Hyperparameters and configuration
-├── data_loader.py      # Data loading and preprocessing
-├── model.py            # FinBERT-CNN architecture
-├── train.py            # Training loop and checkpointing
-├── evaluate.py         # Evaluation metrics and visualization
-├── main.py             # Entry point
-├── requirements.txt    # Python dependencies
-└── README.md          # This file
-
-data/
-└── headlines_rv.csv   # Your data (see format below)
-
-checkpoints/           # Model checkpoints (auto-created)
+hpml-project/
+├── data/
+│   ├── raw/                    # Raw datasets
+│   ├── processed/              # Processed features
+│   └── splits/                 # Train/val/test splits
+├── models/
+│   ├── finbert/                # FinBERT checkpoints
+│   └── alpha_net/              # Alpha network (Phase 2)
+├── src/
+│   ├── data_collection.py      # Data fetching
+│   ├── data_loader.py          # PyTorch datasets
+│   ├── finbert_model.py        # Model architecture
+│   ├── train_finbert.py        # Training loop
+│   └── sentiment_inference.py  # Inference pipeline
+├── config.py                   # Configuration
+├── main.py                     # Main orchestration script
+└── requirements.txt            # Dependencies
 ```
 
 ## Setup
@@ -42,192 +39,221 @@ checkpoints/           # Model checkpoints (auto-created)
 pip install -r requirements.txt
 ```
 
-### 2. Prepare Data
+### 2. (Optional) Configure NewsAPI
 
-Create `data/headlines_rv.csv` with columns:
-- `date`: Date of the headline (YYYY-MM-DD)
-- `headline`: News headline text
-- `realized_volatility`: Next-day RV value
+Edit `config.py` and set your NewsAPI key:
 
-Example:
-```csv
-date,headline,realized_volatility
-2020-01-01,Apple reports strong Q4 earnings,2.34
-2020-01-02,Fed keeps interest rates unchanged,1.87
+```python
+NEWS_API_KEY = "your_api_key_here"
 ```
 
-**Important:** Data should be sorted by date! The code preserves temporal order in train/val/test splits.
+If not configured, sample headlines will be generated for testing.
 
 ## Usage
 
-### Training
+### Quick Start - Run Full Pipeline
 
-Train a new model:
 ```bash
-python main.py --mode train
+python main.py --all
 ```
 
-This will:
-- Load and split data (70/15/15 train/val/test)
-- Train for 50 epochs (default)
-- Save checkpoints to `checkpoints/`
-- Evaluate on test set
-- Generate plots: `training_curves.png`, `test_predictions.png`
+This runs all three steps:
+1. Data collection
+2. FinBERT training
+3. Sentiment inference
 
-### Evaluation
+### Run Individual Steps
 
-Evaluate a trained model:
 ```bash
-python main.py --mode eval --checkpoint checkpoints/best_model.pt
+# Data collection only
+python main.py --data
+
+# Training only
+python main.py --train
+
+# Inference only
+python main.py --inference
 ```
 
-### Inference
+### Alternative: Run Modules Directly
 
-Predict RV for new headlines:
 ```bash
-python main.py --mode inference --checkpoint checkpoints/best_model.pt
-```
+# Data collection
+python src/data_collection.py
 
-(Edit the example headlines in `main.py` or extend to read from file)
+# Training
+python src/train_finbert.py
+
+# Inference
+python src/sentiment_inference.py
+```
 
 ## Configuration
 
 Edit `config.py` to customize:
 
+- **Data**: Date ranges, ticker symbol (SPY)
+- **Model**: BERT variant, dropout rates, layer freezing
+- **Training**: Batch size, learning rate, epochs, gradient accumulation
+- **Device**: Automatically selects MPS (Mac) / CUDA / CPU
+
+### Key Hyperparameters
+
 ```python
-# Model
-num_filters = 50              # Filters per CNN layer
-filter_sizes = [1, 2, 3]      # Unigram, bigram, trigram
-dropout_rate = 0.5
-
-# Training
-batch_size = 32
-learning_rate = 1e-4
-num_epochs = 50
-weight_decay = 3.0            # L2 regularization
-
-# Data
-train_ratio = 0.7
-val_ratio = 0.15
-test_ratio = 0.15
+BATCH_SIZE = 16
+GRADIENT_ACCUMULATION_STEPS = 2  # Effective batch size = 32
+NUM_EPOCHS = 4
+LEARNING_RATE = 2e-5
+WARMUP_RATIO = 0.1
+USE_AMP = True  # Mixed precision training
 ```
 
-## Model Details
+## Pipeline Details
 
-### FinBERT Embeddings
-- **Model**: `ProsusAI/finbert` (pre-trained on financial text)
-- **Output**: 768-dimensional embeddings per token
-- **Max Length**: 512 tokens (default)
-- **Frozen**: Embeddings are not fine-tuned (faster training)
+### Phase 1: Data Collection
 
-### CNN Architecture
-- **Filters**: 50 filters each for 1-gram, 2-gram, 3-gram
-- **Activation**: ReLU
-- **Pooling**: Global max pooling
-- **Regularization**: Dropout (0.5) + L2 weight decay (3.0)
+**Inputs:**
+- Financial PhraseBank (HuggingFace)
+- SPY price data (yfinance)
+- Financial headlines (NewsAPI or sample data)
 
-### Output
-- **Task**: Regression (next-day realized volatility)
-- **Loss**: Mean Squared Error (MSE)
-- **Metrics**: MSE, RMSE, MAE, QLIKE, R²
+**Outputs:**
+- `data/raw/financial_phrasebank.csv`
+- `data/raw/realized_volatility.csv`
+- `data/raw/financial_headlines.csv`
+- `data/processed/aligned_dataset.csv`
+- `data/splits/{train,val,test}.csv`
 
-## Evaluation Metrics
+### Phase 2: FinBERT Training
 
-Following the paper, we report:
-- **MSE**: Mean Squared Error
-- **RMSE**: Root Mean Squared Error  
-- **MAE**: Mean Absolute Error
-- **QLIKE**: Quasi-likelihood (volatility-specific metric)
-- **R²**: Coefficient of determination
+**Architecture:**
+- Base: `bert-base-uncased` (110M parameters)
+- Head: Linear regression layer (continuous sentiment output)
+- Loss: MSE
+- Optimization: AdamW + linear warmup + gradient accumulation
 
-## Results
+**Training Features:**
+- Mixed precision (MPS/CUDA)
+- Gradient accumulation
+- Learning rate warmup
+- Best model checkpointing
 
-Example output after training:
+**Outputs:**
+- `models/finbert/best_model/`
+- `models/finbert/checkpoint_epoch_N/`
+- `models/finbert/training_history.json`
+
+### Phase 3: Sentiment Inference
+
+**Process:**
+1. Load trained FinBERT model
+2. Batch inference on all headlines
+3. Aggregate daily sentiment features:
+   - `mean_square_sentiment`: E[s²]
+   - `sentiment_variance`: Var(s)
+   - `headline_count`: Number of headlines
+
+**Outputs:**
+- `data/processed/sentiment_features.csv`
+- `data/processed/sentiment_features_{train,val,test}.csv`
+
+## Model Performance
+
+After training, review:
+
+```bash
+# Training history
+cat models/finbert/training_history.json
+
+# Validation metrics
+# - MSE: Mean squared error on sentiment prediction
+# - Correlation: Correlation between predicted and actual sentiment
 ```
-Test Set Metrics:
-----------------------------------------
-  MSE       : 0.123456
-  RMSE      : 0.351362
-  MAE       : 0.234567
-  QLIKE     : 0.012345
-  R2        : 0.789012
-----------------------------------------
-```
 
-## Extending the Code
+## Next Steps (Phase 2)
 
-### Adding Custom Loss Functions
-Edit `train.py`:
+1. **Implement Alpha Network**
+   - Input: Sentiment features + market regime
+   - Output: α ∈ [0,1] weight
+   - Architecture: Simple MLP
+
+2. **Integrate with HAR-RV**
+   - Get HAR-RV forecasts from teammates
+   - Combined forecast: `RV = α * RV_sentiment + (1-α) * RV_HAR`
+
+3. **Training**
+   - Loss: MSE on realized volatility
+   - Optimize end-to-end
+
+## Optimization Experiments
+
+To explore FinBERT training optimizations, modify `config.py`:
+
 ```python
-# Example: Add QLIKE loss
-def qlike_loss(y_pred, y_true):
-    epsilon = 1e-8
-    return torch.mean(
-        (y_true / (y_pred + epsilon)) - 
-        torch.log((y_true + epsilon) / (y_pred + epsilon)) - 1
-    )
+# Batch size tuning
+BATCH_SIZE = 32
+GRADIENT_ACCUMULATION_STEPS = 1
+
+# Learning rate scheduling
+WARMUP_RATIO = 0.06  # Try: 0.06, 0.1, 0.15
+
+# Dropout tuning
+HIDDEN_DROPOUT_PROB = 0.2  # Try: 0.1, 0.2, 0.3
+
+# Layer freezing
+FREEZE_ENCODER_LAYERS = 6  # Freeze first 6 layers
 ```
 
-### Changing Filter Sizes
-Edit `config.py`:
-```python
-filter_sizes = [1, 2, 3, 4]  # Add 4-grams
-num_filters = 100             # More filters
-```
+## Hardware Requirements
 
-### Fine-tuning FinBERT
-Edit `model.py`:
-```python
-# In FinBERTCNN.__init__()
-# Comment out the freezing:
-# for param in self.finbert.parameters():
-#     param.requires_grad = False
-
-# Now FinBERT will be fine-tuned (slower but may improve)
-```
-
-## Next Steps (For Your Project)
-
-This implementation provides the baseline NLP pipeline. For your project goals:
-
-1. **Alpha Weighting**: 
-   - Add confidence estimation (e.g., prediction variance)
-   - Implement ensemble with HAR model: `final_pred = alpha * HAR + (1-alpha) * NLP`
-   - Learn alpha based on uncertainty or validation performance
-
-2. **Optimization Techniques**:
-   - Model quantization (INT8)
-   - Knowledge distillation
-   - Batch processing for throughput
-   - ONNX export for deployment
-
-3. **Performance Metrics**:
-   - Measure inference latency
-   - Track throughput (predictions/sec)
-   - Compare vs HAR baseline
+- **Minimum**: CPU (slow)
+- **Recommended**: 
+  - Mac M1/M2 with MPS acceleration
+  - NVIDIA GPU with CUDA
+- **Memory**: 8GB+ RAM
+- **Storage**: ~2GB for data + models
 
 ## Troubleshooting
 
-**CUDA Out of Memory:**
-- Reduce `batch_size` in `config.py`
-- Use CPU: `device = "cpu"`
+### Issue: MPS not available
+**Solution**: Falls back to CPU automatically
 
-**Poor Performance:**
-- Check data quality (missing values, outliers)
-- Verify temporal ordering is preserved
-- Try more epochs or different learning rates
-- Unfreeze FinBERT for fine-tuning (slower)
+### Issue: Out of memory
+**Solution**: Reduce batch size or increase gradient accumulation steps
 
-**Import Errors:**
-- Ensure all dependencies installed: `pip install -r requirements.txt`
-- Check Python version (3.8+)
+```python
+BATCH_SIZE = 8
+GRADIENT_ACCUMULATION_STEPS = 4
+```
 
-## References
+### Issue: Data collection fails
+**Solution**: Check NewsAPI key or use sample data (automatic fallback)
 
-- Paper: "Realised Volatility Forecasting: Machine Learning via Financial Word Embedding" (Rahimikia et al., 2024)
-- FinBERT: https://huggingface.co/ProsusAI/finbert
-- Original paper implementation: Uses custom Word2Vec embeddings
+## Development
+
+### Test Individual Components
+
+```bash
+# Test model
+python src/finbert_model.py
+
+# Test data loader
+python src/data_loader.py
+```
+
+## Citation
+
+Based on FinBERT paper:
+```
+@article{araci2019finbert,
+  title={FinBERT: Financial Sentiment Analysis with Pre-trained Language Models},
+  author={Araci, Dogu},
+  journal={arXiv preprint arXiv:1908.10063},
+  year={2019}
+}
+```
 
 ## License
 
-MIT License (or specify your license)
+MIT
+

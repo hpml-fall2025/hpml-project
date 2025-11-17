@@ -74,6 +74,11 @@ def evaluate(
 	# Symmetric MAPE
 	with np.errstate(divide="ignore", invalid="ignore"):
 		smape = np.nanmean(200 * np.abs(y_hat - y) / (np.abs(y_hat) + np.abs(y)))
+	
+	with np.errstate(divide="ignore", invalid="ignore"):
+		mape = np.nanmean(200 * (y_hat - y) / ((y_hat) + (y)))
+
+	mpe = pred_df['percent_error'].mean()
 
 	# R^2
 	ss_res = np.sum(residuals ** 2)
@@ -85,6 +90,8 @@ def evaluate(
 		"rmse": rmse,
 		"mae": mae,
 		"smape": smape,
+		"mape": mape,
+		"mpe": mpe,
 		"r2": r2,
 	}
 

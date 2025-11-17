@@ -4,11 +4,11 @@ Configuration file for 5-minute Realized Variance Prediction System.
 
 TICKER = "SPY"
 
-TEST_INTERVAL = ["2025-10-27", "2025-10-31"]
+TEST_INTERVAL = ["2025-11-10", "2025-11-14"]
 
-VALIDATION_INTERVAL = ["2025-10-20", "2025-10-24"]
+VALIDATION_INTERVAL = ["2025-11-03", "2025-11-07"]
 
-TRAINING_INTERVAL = ["2025-09-15", "2025-10-17"]
+TRAINING_INTERVAL = ["2025-09-29", "2025-10-31"]
 
 TIME_INTERVAL = "5m"
 
@@ -22,5 +22,5 @@ MODEL_CONFIGS = {
         'ridge_alpha': 1000,
 }
 
-ALPHA_CONFIGS = [0, 0.01, 0.1, 1.0, 10, 100, 1000, 10e3, 10e4, 10e5]
+ALPHA_CONFIGS = [0, 10e-5, 10e-4, 10e-3, 0.01, 0.1, 1.0, 10, 100]
 FEATURE_CONFIGS = ['1b', '12b', '78b', '390b', '1D', '1W']

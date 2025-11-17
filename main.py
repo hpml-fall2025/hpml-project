@@ -73,6 +73,8 @@ def main() -> None:
 			print(f"RMSE:  {metrics['rmse']:.6f}")
 			print(f"MAE:   {metrics['mae']:.6f}")
 			print(f"SMAPE: {metrics['smape']:.6f}")
+			print(f"MAPE: {metrics['mape']:.6f}")
+			print(f"MPE: {metrics['mpe']:.6f}")
 			print(f"R2:    {metrics['r2']:.6f}")
 
 			results.append({
@@ -86,7 +88,7 @@ def main() -> None:
 			print("====================")
 
 			# lower is better
-			for metric_name in ["mse", "rmse", "mae", "smape"]:
+			for metric_name in ["mse", "rmse", "mae", "smape", "mape", "mpe"]:
 				best = min(results, key=lambda r: r["metrics"][metric_name])
 				cfg = best["config"]
 				val = best["metrics"][metric_name]

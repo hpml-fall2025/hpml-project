@@ -1,6 +1,11 @@
 import time
 import streamlit as st
 import pandas as pd
+import sys
+import os
+
+# Add root to path so we can import from pipelines and dashboard
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from dashboard.layout import init_page, render_header
 from dashboard.sidebar import render_sidebar

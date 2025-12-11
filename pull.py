@@ -12,7 +12,7 @@ from typing import List
 def get_historical_data(ticker: str, data_interval: List[str], time_interval: str) -> pd.DataFrame:
     """Fetch historical 5-minute stock data using yfinance."""
     try:
-        start_date = datetime.strptime(data_interval[0], "%Y-%m-%d") - timedelta(days = 7)
+        start_date = datetime.strptime(data_interval[0], "%Y-%m-%d") - timedelta(days = 31)
         
         end_date = datetime.strptime(data_interval[1], "%Y-%m-%d") + timedelta(days = 1)
         

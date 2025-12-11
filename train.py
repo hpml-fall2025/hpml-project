@@ -39,7 +39,12 @@ def train(model: Dict, data: pd.DataFrame, dates: List[datetime.date]) -> List[f
     return reg.intercept_, list(map(float, reg.coef_))
 
 
-VALID_TOKENS = {"1b", "12b", "78b", "390b", "1D", "1W"}
+# Now that we're on daily data, tokens are:
+#   1b  = current day's RV (rolling 1)
+#   1D  = previous day's RV
+#   1W  = mean RV over previous 5 days
+#   1M  = mean RV over previous 22 days
+VALID_TOKENS = {"1b", "1D", "1W", "1M"}
 
 
 def calculate_log_returns(prices: pd.Series) -> pd.Series:
@@ -47,37 +52,33 @@ def calculate_log_returns(prices: pd.Series) -> pd.Series:
     return np.log(prices / prices.shift(1))
 
 
-
 def _precompute_feature_series(
     index: pd.DatetimeIndex,
     r2: pd.Series,
 ) -> Dict[str, pd.Series]:
     """
-    Precompute all feature series:
+    Precompute all feature series for (now) daily data:
 
-        '1b'   : mean of last 1 bar (essentially r2 itself)
-        '12b'  : mean of last 12 bars
-        '78b'  : mean of last 78 bars
-        '390b' : mean of last 390 bars
-        '1D'   : previous day's realized variance (sum of r2 over that day)
-        '1W'   : mean RV over previous 5 days
+        '1b' : RV at current index (rolling 1-day mean of r2)
+        '1D' : previous day's realized variance
+        '1W' : mean RV over previous 5 days
+        '1M' : mean RV over previous 22 days
 
     Returns:
         dict: token -> Series aligned with `index`.
     """
+    # 1b: rolling 1 (effectively just r2 itself, but keeps interface consistent)
     f_1b = r2.rolling(1, min_periods=1).mean()
-    f_12b = r2.rolling(12, min_periods=12).mean()
-    f_78b = r2.rolling(78, min_periods=78).mean()
-    f_390b = r2.rolling(390, min_periods=390).mean()
 
-    # Daily realized variance: sum of r2 for each calendar date
-    # Treat each unique index.date as one "session"
+    # Daily realized variance per date (here each index is already one day,
+    # but grouping keeps it robust if there are oddities)
     dates = pd.Series(index.date, index=index)
     daily_rv = r2.groupby(dates).sum()
 
     unique_days = np.array(daily_rv.index)
     day_to_1D: Dict = {}
     day_to_1W: Dict = {}
+    day_to_1M: Dict = {}
 
     for i, d in enumerate(unique_days):
         # 1D: previous day's RV
@@ -94,18 +95,25 @@ def _precompute_feature_series(
         else:
             day_to_1W[d] = np.nan
 
-    # Align 1D/1W back to bar-level index
+        # 1M: mean of previous 22 days' RV
+        if i >= 22:
+            prev_days_m = unique_days[i - 22 : i]
+            vals_m = [daily_rv[pd_] for pd_ in prev_days_m]
+            day_to_1M[d] = float(np.mean(vals_m))
+        else:
+            day_to_1M[d] = np.nan
+
+    # Align 1D/1W/1M back to bar-level index
     day_array = dates.values
     f_1D = pd.Series([day_to_1D[d] for d in day_array], index=index)
     f_1W = pd.Series([day_to_1W[d] for d in day_array], index=index)
+    f_1M = pd.Series([day_to_1M[d] for d in day_array], index=index)
 
     return {
         "1b": f_1b,
-        "12b": f_12b,
-        "78b": f_78b,
-        "390b": f_390b,
         "1D": f_1D,
         "1W": f_1W,
+        "1M": f_1M,
     }
 
 
@@ -119,10 +127,10 @@ def _build_training_matrix(
     """
     Construct the design matrix X and target y.
 
-    For each bar i where:
+    For each bar/day i where:
         - index[i].date() is in training `dates`
         - all requested features at i are finite
-        - next-bar r2[i+1] is finite
+        - next-day r2[i+1] is finite
 
     we create one sample:
         X_i = [feature_series[token].iloc[i] for token in tokens]

@@ -18,7 +18,7 @@ class VolatilityPipeline(Pipeline):
         # clean 5m interval data to process best for har-rv
         curr_data_cleaned = curr_data.rename(columns={"Close": "close", "Volume": "volume", "Open": "open", "High": "high", "Low": "low"})
         curr_data_cleaned.columns = curr_data_cleaned.columns.droplevel("Ticker")
-        curr_data_cleaned.index = curr_data_cleaned.index.tz_localize(None)
+        curr_data_cleaned.index = curr_data_cleaned.index.tz_convert("America/New_York").tz_localize(None)
         curr_data_cleaned.index.name = "date"
         curr_data_cleaned.columns.name = None
 
@@ -31,6 +31,16 @@ class VolatilityPipeline(Pipeline):
         df.loc[df["D"] != df["D"].shift(), "Per"] = n_periods
         df.fillna(method = 'ffill', inplace = True)
         df["Ret"] = np.where(df["D"] == df["D"].shift(), ( (df["close"]-df["close"].shift()) * 1/df["Per"] ) **2, np.nan)
+        rv = alt_df.groupby("D")["Ret"].agg(np.sum).to_frame()
+        rv.columns = ["RV_daily"]
+        rv["RV_daily"] = np.sqrt(rv["RV_daily"])
+        date = str(rv["RV_daily"].idxmax())
+        df["close"].loc[date]
+        date = str(rv["RV_daily"].idxmax())
+        plt.plot(df["close"].loc[date], label = f"{sample} close price")
+        plt.title(f"{ticker} on {date}")
+        plt.legend()
+        plt.show()
 
     def get_har_rv(self, data: pd.DataFrame) -> float:
         pass

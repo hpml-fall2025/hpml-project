@@ -15,7 +15,7 @@ class VolatilityPipeline(Pipeline):
         
         # 1. Load and Resample Historical Data
         try:
-            # Load only necessary columns to save memory/time if possible, but 130MB is manageable.
+            # Load only necessary columns
             model_data = pd.read_csv(csv_path)
             model_data['date'] = pd.to_datetime(model_data['date'])
             model_data.set_index('date', inplace=True)
@@ -26,28 +26,36 @@ class VolatilityPipeline(Pipeline):
                 'high': 'max',
                 'low': 'min',
                 'close': 'last',
-                'volume': 'sum' # Sum volume
+                'volume': 'sum' 
             }
-            # Drop NaN rows that might result from empty bins (though unlikely for SPY trading hours)
-            model_data_5m = model_data.resample('5min').agg(agg_dict).dropna()
+            # Drop NaN rows
+            self.full_hist_data = model_data.resample('5min').agg(agg_dict).dropna()
             
-            # 2. Calculate RV features on Historical Data
-            self.train_df = self.__rv_calculation(model_data_5m)
+            # Initial Training on ALL history (Default behavior)
+            self._train_model(self.full_hist_data)
             
-            # 3. Determine Scaling Parameters (Min/Max from Training Set)
+            # Demo Mode State
+            self.demo_mode = False
+            self.demo_current_idx = 0
+            
+        except Exception as e:
+            print(f"Error initializing VolatilityPipeline: {e}")
+            self.model = None
+
+    def _train_model(self, data: pd.DataFrame):
+        try:
+            # 2. Calculate RV features
+            self.train_df = self.__rv_calculation(data)
+            
+            # 3. Determine Scaling Parameters
             self.train_min = self.train_df.min()
             self.train_max = self.train_df.max()
             
             # 4. Prepare Training Data
-            # Scale
             train_scaled = (self.train_df - self.train_min) / (self.train_max - self.train_min)
-            
-            # Target: Next day's RV (RV_daily shifted back by 1 day)
-            # Logic: We want to predict t+1 using information up to t.
             train_scaled["Target"] = train_scaled["RV_daily"].shift(-1)
             train_scaled = train_scaled.dropna()
             
-            # Features
             X = train_scaled[["RV_daily", "RV_weekly", "RV_monthly"]]
             X = sm.add_constant(X)
             y = train_scaled["Target"]
@@ -55,54 +63,92 @@ class VolatilityPipeline(Pipeline):
             # 5. Train Model
             self.model = sm.OLS(y, X).fit()
             print("VolatilityPipeline: Model trained successfully.")
-            
         except Exception as e:
-            print(f"Error initializing VolatilityPipeline: {e}")
-            self.model = None
+            print(f"Error training model: {e}")
+
+    def setup_demo_mode(self, test_ratio=0.2):
+        """
+        Activates Demo Mode.
+        Splits historical data into Train (80%) and Test (20%).
+        Retrains model on Train set.
+        Sets internal pointer to start of Test set for simulation.
+        """
+        self.demo_mode = True
+        
+        n = len(self.full_hist_data)
+        split_idx = int(n * (1 - test_ratio))
+        
+        # Split Data
+        train_data = self.full_hist_data.iloc[:split_idx]
+        # We keep full data accessible for windowing, but demo "starts" at split_idx
+        self.demo_start_idx = split_idx
+        self.demo_current_idx = split_idx
+        
+        print(f"Demo Mode: Training on {len(train_data)} samples, Testing on {n - split_idx} samples.")
+        
+        # Retrain on only the training portion
+        self._train_model(train_data)
+        
+        # Pre-calculate Ground Truth for the Test Set (Actual RVs)
+        # We calculate RV on the FULL dataset so we have continuity across the split
+        full_rv = self.__rv_calculation(self.full_hist_data)
+        # Target for day D is RV of D+1. 
+        # So for a prediction made at time T (Day D), we compare to RV_daily(D+1).
+        # We store this for easy lookup.
+        self.ground_truth_rv = full_rv["RV_daily"].shift(-1)
 
     def _get_latest_data(self) -> pd.DataFrame:
-        """Fetch live 5-minute data from yfinance for SPY."""
-        # 59 days is the max for 5m interval in yfinance
-        end_date = dt.datetime.now()
-        start_date = end_date - dt.timedelta(days=59)
+        """Fetch live 5-minute data from yfinance OR simulate from history."""
         
-        try:
-            # Retrieve data
-            df = yf.download("SPY", start=start_date, end=end_date, interval="5m", progress=False)
+        if self.demo_mode:
+            # Simulate Data Stream
+            # We return data from [CurrentIdx - Window] to [CurrentIdx]
+            # Window: 59 days (approx 5min bars) -> 59 * 78 bars/day approx? 
+            # Actually, let's just grab a large enough chunk to ensure rolling windows work.
+            # 2 months ~ 4000 bars (assuming ~78 bars/day for 6.5h)
+            lookback = 5000 
             
-            if df.empty:
-                return pd.DataFrame()
-
-            # Handle MultiIndex columns if present (common in newer yfinance)
-            if isinstance(df.columns, pd.MultiIndex):
-                # If Ticker is the second level, drop it
-                if df.columns.nlevels > 1:
-                    df.columns = df.columns.droplevel(1)
-
-            # Standardize columns
-            df = df.rename(columns={
-                "Close": "close", 
-                "Volume": "volume", 
-                "Open": "open", 
-                "High": "high", 
-                "Low": "low"
-            })
+            start_idx = max(0, self.demo_current_idx - lookback)
             
-            # Remove zero volume bars (market closed or glitches)
-            df = df[df['volume'] > 0]
+            # Slice the history up to the current simulation time
+            df_slice = self.full_hist_data.iloc[start_idx : self.demo_current_idx + 1]
             
-            # Timezone handling
-            df.index = pd.to_datetime(df.index)
-            if df.index.tz is not None:
-                df.index = df.index.tz_convert("America/New_York").tz_localize(None)
+            return df_slice
+            
+        else:
+            # LIVE MODE (yfinance)
+            end_date = dt.datetime.now()
+            start_date = end_date - dt.timedelta(days=59)
+            
+            try:
+                df = yf.download("SPY", start=start_date, end=end_date, interval="5m", progress=False)
                 
-            df.index.name = "date"
-            
-            return df
-            
-        except Exception as e:
-            print(f"Error downloading data: {e}")
-            return pd.DataFrame()
+                if df.empty:
+                    return pd.DataFrame()
+
+                if isinstance(df.columns, pd.MultiIndex):
+                    if df.columns.nlevels > 1:
+                        df.columns = df.columns.droplevel(1)
+
+                df = df.rename(columns={
+                    "Close": "close", 
+                    "Volume": "volume", 
+                    "Open": "open", 
+                    "High": "high", 
+                    "Low": "low"
+                })
+                
+                df = df[df['volume'] > 0]
+                df.index = pd.to_datetime(df.index)
+                if df.index.tz is not None:
+                    df.index = df.index.tz_convert("America/New_York").tz_localize(None)
+                df.index.name = "date"
+                
+                return df
+                
+            except Exception as e:
+                print(f"Error downloading data: {e}")
+                return pd.DataFrame()
     
     def __rv_calculation(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -152,6 +198,7 @@ class VolatilityPipeline(Pipeline):
     def get_latest_data(self) -> dict:
         """
         Fetch latest data, calculate RV, and predict next day's volatility.
+        Demo Mode: Auto-increments time step and returns Ground Truth.
         """
         if self.model is None:
             return {"error": "Model not initialized"}
@@ -183,4 +230,32 @@ class VolatilityPipeline(Pipeline):
         # Predict
         prediction = self.model.predict(last_row)[0]
         
-        return {"volatility_prediction": float(prediction)}
+        result = {"volatility_prediction": float(prediction)}
+        
+        if self.demo_mode:
+            # Add Ground Truth
+            # The current simulation time is the last timestamp of curr_data
+            current_sim_time = curr_data.index[-1]
+            current_sim_date = current_sim_time.date()
+            
+            result["timestamp"] = str(current_sim_time)
+            
+            # Ground Truth Logic:
+            # We predicted 'Target' which is RV of DAY+1.
+            # We check if we have the actual RV for this date in our ground_truth map.
+            # Note: The mapping calculates Target = Shift(-1).
+            # So looking up 'current_sim_date' in ground_truth_rv gives the TRUE target (RV of tomorrow).
+            
+            if current_sim_date in self.ground_truth_rv.index:
+                actual = self.ground_truth_rv.loc[current_sim_date]
+                result["actual_next_day_rv"] = float(actual)
+            else:
+                result["actual_next_day_rv"] = None
+                
+            # Advance Pointer
+            # We assume 1 tick per call
+            self.demo_current_idx += 1
+            if self.demo_current_idx >= len(self.full_hist_data):
+                result["demo_ended"] = True
+                
+        return result

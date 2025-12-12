@@ -25,22 +25,29 @@ class VolatilityPipeline(Pipeline):
         return curr_data_cleaned
     
     def har_rv_calculation(self):
+        
+        # pull latest data
         df = self.get_latest_data() 
+
+        # period calculation
         df["D"] = df.index.date
         n_periods = df.pivot_table(index = ["D"], aggfunc = 'size').values
         df.loc[df["D"] != df["D"].shift(), "Per"] = n_periods
         df.fillna(method = 'ffill', inplace = True)
+        
+        # calculate daily returns
         df["Ret"] = np.where(df["D"] == df["D"].shift(), ( (df["close"]-df["close"].shift()) * 1/df["Per"] ) **2, np.nan)
-        rv = alt_df.groupby("D")["Ret"].agg(np.sum).to_frame()
+        
+        # calculate daily RV
+        rv = df.groupby("D")["Ret"].agg(np.sum).to_frame()
         rv.columns = ["RV_daily"]
         rv["RV_daily"] = np.sqrt(rv["RV_daily"])
+        
+        # find max RV date
         date = str(rv["RV_daily"].idxmax())
-        df["close"].loc[date]
-        date = str(rv["RV_daily"].idxmax())
-        plt.plot(df["close"].loc[date], label = f"{sample} close price")
-        plt.title(f"{ticker} on {date}")
-        plt.legend()
-        plt.show()
+        close_price = df["close"].loc[date]
+        
+        return close_price
 
     def get_har_rv(self, data: pd.DataFrame) -> float:
         pass

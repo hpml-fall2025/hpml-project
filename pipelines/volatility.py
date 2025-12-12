@@ -84,6 +84,15 @@ class VolatilityPipeline(Pipeline):
         model_rv = __rv_calculation(model_data)
         model_rv_scaled = __get_har_rv(model_rv)
 
+        X_model = model_rv_scaled.drop("Target", axis = 1)
+        X_curr = curr_rv_scaled.drop("Target", axis = 1)
+
+        y_model = model_rv_scaled[["Target"]]
+        y_curr = curr_rv_scaled[["Target"]]
+
+        results = sm.OLS(y_train, X_train),fit()
+        y_hat = results.predict(X_curr)
+        
 
 
 

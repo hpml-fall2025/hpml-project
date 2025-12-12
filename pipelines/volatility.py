@@ -1,7 +1,15 @@
-import yfinance as yf
 import pandas as pd
-import datetime as dt
-import numpy as np
+import numpy as np 
+import warnings
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+from datetime import datetime
+from statsmodels.tsa.stattools import adfuller as adf
+from statsmodels.graphics.gofplots import qqplot
+from pandas.plotting import register_matplotlib_converters
+from pandas.plotting import autocorrelation_plot
+from pandas_datareader import data
+from scipy import stats
 from .base import Pipeline
 
 class VolatilityPipeline(Pipeline):
@@ -47,7 +55,38 @@ class VolatilityPipeline(Pipeline):
         rv.dropna(inplace = True)
 
         return rv
-    
-    def __get_har_rv(self, data: pd.DataFrame) -> float:
-        
 
+
+    def __get_har_rv(self, df: pd.DataFrame, rv: pd.DataFrame) -> float:
+
+        # construct volume df for daily volume
+        volume = df[["volume"]]
+        volume = volume.resample('D')["volume"].sum().reset_index()
+        volume = volume.set_index("date")
+
+        rv["SPY_volume"] = volume.loc[rv.index]
+
+        rv["Target"] = rv["RV_daily"].shift(-1)
+        rv.dropna(inplace = True)
+
+        rv_scaled = (rv - rv.min()) / (rv.max() - rv.min())
+        rv_scaled = sm.add_constant(rv_scaled)
+
+        return rv_scaled
+
+    def main(self):
+
+        curr_data = _get_latest_data()
+        curr_rv = __rv_calculation(curr_data)
+        curr_rv_scaled = __get_har_rv(curr_rv)
+
+        model_data = pd.read_csv("SPY1min_clean.csv", parse_dates=True)
+        model_rv = __rv_calculation(model_data)
+        model_rv_scaled = __get_har_rv(model_rv)
+
+
+
+
+
+
+        

@@ -1,101 +1,186 @@
 import pandas as pd
 import numpy as np 
 import warnings
-import matplotlib.pyplot as plt
 import statsmodels.api as sm
-from datetime import datetime
-from statsmodels.tsa.stattools import adfuller as adf
-from statsmodels.graphics.gofplots import qqplot
-from pandas.plotting import register_matplotlib_converters
-from pandas.plotting import autocorrelation_plot
-from pandas_datareader import data
-from scipy import stats
+import datetime as dt
+import yfinance as yf
+import os
 from .base import Pipeline
 
 class VolatilityPipeline(Pipeline):
     def __init__(self):
-        pass
+        # Locate CSV relative to this file
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        csv_path = os.path.join(base_dir, "SPY1min_clean.csv")
+        
+        # 1. Load and Resample Historical Data
+        try:
+            # Load only necessary columns to save memory/time if possible, but 130MB is manageable.
+            model_data = pd.read_csv(csv_path)
+            model_data['date'] = pd.to_datetime(model_data['date'])
+            model_data.set_index('date', inplace=True)
+            
+            # Resample 1min -> 5min
+            agg_dict = {
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum' # Sum volume
+            }
+            # Drop NaN rows that might result from empty bins (though unlikely for SPY trading hours)
+            model_data_5m = model_data.resample('5min').agg(agg_dict).dropna()
+            
+            # 2. Calculate RV features on Historical Data
+            self.train_df = self.__rv_calculation(model_data_5m)
+            
+            # 3. Determine Scaling Parameters (Min/Max from Training Set)
+            self.train_min = self.train_df.min()
+            self.train_max = self.train_df.max()
+            
+            # 4. Prepare Training Data
+            # Scale
+            train_scaled = (self.train_df - self.train_min) / (self.train_max - self.train_min)
+            
+            # Target: Next day's RV (RV_daily shifted back by 1 day)
+            # Logic: We want to predict t+1 using information up to t.
+            train_scaled["Target"] = train_scaled["RV_daily"].shift(-1)
+            train_scaled = train_scaled.dropna()
+            
+            # Features
+            X = train_scaled[["RV_daily", "RV_weekly", "RV_monthly"]]
+            X = sm.add_constant(X)
+            y = train_scaled["Target"]
+            
+            # 5. Train Model
+            self.model = sm.OLS(y, X).fit()
+            print("VolatilityPipeline: Model trained successfully.")
+            
+        except Exception as e:
+            print(f"Error initializing VolatilityPipeline: {e}")
+            self.model = None
 
     def _get_latest_data(self) -> pd.DataFrame:
+        """Fetch live 5-minute data from yfinance for SPY."""
+        # 59 days is the max for 5m interval in yfinance
+        end_date = dt.datetime.now()
+        start_date = end_date - dt.timedelta(days=59)
+        
+        try:
+            # Retrieve data
+            df = yf.download("SPY", start=start_date, end=end_date, interval="5m", progress=False)
+            
+            if df.empty:
+                return pd.DataFrame()
 
-        # pull initial data from yfinance
-        start_date = dt.datetime.today() - dt.timedelta(days=59)
-        curr_data = yf.download("SPY", period="1y", interval="5m", start=start_date)
-        curr_data = curr_data[curr_data['Volume'] != 0]
-        curr_data = curr_data.dropna()
+            # Handle MultiIndex columns if present (common in newer yfinance)
+            if isinstance(df.columns, pd.MultiIndex):
+                # If Ticker is the second level, drop it
+                if df.columns.nlevels > 1:
+                    df.columns = df.columns.droplevel(1)
 
-        # clean 5m interval data to process best for har-rv
-        curr_data_cleaned = curr_data.rename(columns={"Close": "close", "Volume": "volume", "Open": "open", "High": "high", "Low": "low"})
-        curr_data_cleaned.columns = curr_data_cleaned.columns.droplevel("Ticker")
-        curr_data_cleaned.index = curr_data_cleaned.index.tz_convert("America/New_York").tz_localize(None)
-        curr_data_cleaned.index.name = "date"
-        curr_data_cleaned.columns.name = None
-
-        return curr_data_cleaned
+            # Standardize columns
+            df = df.rename(columns={
+                "Close": "close", 
+                "Volume": "volume", 
+                "Open": "open", 
+                "High": "high", 
+                "Low": "low"
+            })
+            
+            # Remove zero volume bars (market closed or glitches)
+            df = df[df['volume'] > 0]
+            
+            # Timezone handling
+            df.index = pd.to_datetime(df.index)
+            if df.index.tz is not None:
+                df.index = df.index.tz_convert("America/New_York").tz_localize(None)
+                
+            df.index.name = "date"
+            
+            return df
+            
+        except Exception as e:
+            print(f"Error downloading data: {e}")
+            return pd.DataFrame()
     
     def __rv_calculation(self, df: pd.DataFrame) -> pd.DataFrame:
-        
-        # calculate period
+        """
+        Calculate Realized Volatility components (Daily, Weekly, Monthly)
+        using the user's specific formula.
+        """
+        df = df.copy()
         df["D"] = df.index.date
-        n_periods = df.pivot_table(index = ["D"], aggfunc = 'size').values
-        df.loc[df["D"] != df["D"].shift(), "Per"] = n_periods
-        df.fillna(method = 'ffill', inplace = True)
         
-        # calculate daily returns
-        df["Ret"] = np.where(df["D"] == df["D"].shift(), ( (df["close"]-df["close"].shift()) * 1/df["Per"] ) **2, np.nan)
+        # Calculate periods per day (Per)
+        # We transform count per group back to the original index
+        df["Per"] = df.groupby("D")["close"].transform("count")
         
-        # calculate realized variance daily
-        rv = df.groupby("D")["Ret"].agg(np.sum).to_frame()
-        rv.columns = ["RV_daily"]
+        # Calculate 'Returns' based on user formula: ((Delta Price) / Per)^2
+        # Ensure we don't diff across days
+        same_day_mask = df["D"] == df["D"].shift(1)
+        price_diff = df["close"] - df["close"].shift(1)
+        
+        # Initialize Ret as NaN
+        df["Ret"] = np.nan
+        
+        # Apply formula only where previous row is same day
+        # Note: shift(1) is Previous. User code: df["close"] - df["close"].shift() which is diff(1)
+        valid_indices = same_day_mask
+        
+        # Calculation: (Diff * (1/Per)) ** 2
+        # Using .loc to safe assign
+        term = price_diff * (1.0 / df["Per"])
+        df.loc[valid_indices, "Ret"] = term ** 2
+        
+        # Aggregate to Daily RV
+        # Sum of 'Ret' for each day
+        rv = df.groupby("D")["Ret"].sum().to_frame("RV_daily")
+        
+        # Square Root as per user code implementation
         rv["RV_daily"] = np.sqrt(rv["RV_daily"])
-
-        # Compute weekly and monthly RV.  
-        rv["RV_weekly"] = rv["RV_daily"].rolling(5).mean()
-        rv["RV_monthly"] = rv["RV_daily"].rolling(21).mean()
-        rv.dropna(inplace = True)
-
+        
+        # Calculate Rolling Weekly (5 days) and Monthly (21 days) averages
+        rv["RV_weekly"] = rv["RV_daily"].rolling(window=5).mean()
+        rv["RV_monthly"] = rv["RV_daily"].rolling(window=21).mean()
+        
+        # Drop NaN values generated by rolling windows
+        rv.dropna(inplace=True)
+        
         return rv
 
+    def get_latest_data(self) -> dict:
+        """
+        Fetch latest data, calculate RV, and predict next day's volatility.
+        """
+        if self.model is None:
+            return {"error": "Model not initialized"}
 
-    def __get_har_rv(self, df: pd.DataFrame, rv: pd.DataFrame) -> float:
-
-        # construct volume df for daily volume
-        volume = df[["volume"]]
-        volume = volume.resample('D')["volume"].sum().reset_index()
-        volume = volume.set_index("date")
-
-        rv["SPY_volume"] = volume.loc[rv.index]
-
-        rv["Target"] = rv["RV_daily"].shift(-1)
-        rv.dropna(inplace = True)
-
-        rv_scaled = (rv - rv.min()) / (rv.max() - rv.min())
-        rv_scaled = sm.add_constant(rv_scaled)
-
-        return rv_scaled
-
-    def main(self):
-
-        curr_data = _get_latest_data()
-        curr_rv = __rv_calculation(curr_data)
-        curr_rv_scaled = __get_har_rv(curr_rv)
-
-        model_data = pd.read_csv("SPY1min_clean.csv", parse_dates=True)
-        model_rv = __rv_calculation(model_data)
-        model_rv_scaled = __get_har_rv(model_rv)
-
-        X_model = model_rv_scaled.drop("Target", axis = 1)
-        X_curr = curr_rv_scaled.drop("Target", axis = 1)
-
-        y_model = model_rv_scaled[["Target"]]
-        y_curr = curr_rv_scaled[["Target"]]
-
-        results = sm.OLS(y_train, X_train),fit()
-        y_hat = results.predict(X_curr)
+        curr_data = self._get_latest_data()
         
+        if curr_data.empty:
+            return {"error": "No data retrieved"}
 
-
-
-
-
+        # Calculate RV features for the live data
+        curr_rv = self.__rv_calculation(curr_data)
         
+        if curr_rv.empty:
+             return {"error": "Not enough live data for rolling windows"}
+
+        # Scale using TRAINING statistics
+        # We must use the same min/max from training to make valid predictions
+        curr_rv_scaled = (curr_rv - self.train_min) / (self.train_max - self.train_min)
+        
+        # Get the most recent day's features
+        last_row = curr_rv_scaled.iloc[[-1]][["RV_daily", "RV_weekly", "RV_monthly"]]
+        
+        # Add constant for OLS
+        last_row['const'] = 1.0
+        
+        # Reorder columns to match model params (order matters for matrix mult)
+        last_row = last_row[self.model.params.index]
+        
+        # Predict
+        prediction = self.model.predict(last_row)[0]
+        
+        return {"volatility_prediction": float(prediction)}

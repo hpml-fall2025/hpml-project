@@ -1,11 +1,8 @@
 from __future__ import absolute_import, division, print_function
-
 import random
-
 import pandas as pd
 from torch.nn import MSELoss, CrossEntropyLoss
-from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
-    TensorDataset)
+from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler, TensorDataset)
 from torch.optim import AdamW
 from tqdm import tqdm
 from tqdm import trange

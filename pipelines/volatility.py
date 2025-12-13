@@ -37,6 +37,7 @@ class VolatilityPipeline(Pipeline):
             # Demo Mode State
             self.demo_mode = False
             self.demo_current_idx = 0
+            self.ground_truth_rv = pd.Series() # Init as empty series
             
         except Exception as e:
             print(f"Error initializing VolatilityPipeline: {e}")
@@ -246,7 +247,7 @@ class VolatilityPipeline(Pipeline):
             # Note: The mapping calculates Target = Shift(-1).
             # So looking up 'current_sim_date' in ground_truth_rv gives the TRUE target (RV of tomorrow).
             
-            if current_sim_date in self.ground_truth_rv.index:
+            if self.ground_truth_rv is not None and current_sim_date in self.ground_truth_rv.index:
                 actual = self.ground_truth_rv.loc[current_sim_date]
                 result["actual_next_day_rv"] = float(actual)
             else:

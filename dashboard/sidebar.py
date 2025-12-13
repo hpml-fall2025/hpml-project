@@ -25,8 +25,11 @@ def render_sidebar() -> dict:
         0.5, 5.0, 1.0, 0.5
     )
     
+    demo_mode = st.sidebar.toggle("Demo Mode")
+    
     return {
         "weight": weight,
         "timeframe": timeframe,
-        "refresh_rate": refresh_rate
+        "refresh_rate": refresh_rate,
+        "demo_mode": demo_mode
     }

@@ -61,60 +61,67 @@ def main():
     if demo_mode:
         st.markdown("### 🧪 Experiment Mode Active")
 
-    placeholder = st.empty()
+    # Placeholders for dynamic content
+    news_placeholder = st.empty()
+    main_placeholder = st.empty()
 
     def _update_and_render():
-        if st.session_state.is_running:
-            news_data = st.session_state.news_pipe.get_latest_data()
-            vol_data = st.session_state.vol_pipe.get_latest_data()
-            
-            # hypothetical headlines for demo
-            if demo_mode:
-                headline = st.session_state.news_pipe.get_headline()
-                st.info(f"📰 **Hypothetical News**: {headline}")
-            
-            # Ensure we use consistent keys for the frontend components
-            # The metrics and charts expect 'har_rv'
-            pred_rv = vol_data.get("volatility_prediction", vol_data.get("har_rv", 0.0))
-            
-            # Timestamp handling: Use timestamp from vol_data if available (demo mode), else current time
-            ts = vol_data.get("timestamp", pd.Timestamp.now(tz="UTC"))
-            if isinstance(ts, str):
-                ts = pd.to_datetime(ts)
-            
-            # Ensure timezone awareness (UTC)
-            if ts.tz is None:
-                ts = ts.tz_localize("UTC")
-            else:
-                ts = ts.tz_convert("UTC")
-
-            new_record = {
-                "timestamp": ts,
-                "har_rv": pred_rv,     # Map prediction to 'har_rv' for compatibility from Refactor
-                **news_data,
-                **{k:v for k,v in vol_data.items() if k not in ["volatility_prediction", "timestamp"]} 
-            }
-            
-            import numpy as np
-            rng = np.random.default_rng()
-            
-            # Simple aggregation for display
-            actual = 0.55 * news_data["news_rv"] + 0.45 * pred_rv + rng.normal(0.0, 0.02)
-            new_record["actual_rv"] = float(max(actual, 1e-6))
-            
-            st.session_state.store.append_data(new_record)
-
-        df = st.session_state.store.get_data(timeframe)
+        tframe = timeframe # capture current timeframe 
         
-        with placeholder.container():
+        # 1. Update Data
+        news_data = st.session_state.news_pipe.get_latest_data()
+        vol_data = st.session_state.vol_pipe.get_latest_data()
+        
+        # hypothetical headlines for demo
+        if demo_mode:
+            headline = st.session_state.news_pipe.get_headline()
+            news_placeholder.info(f"📰 **Hypothetical News**: {headline}")
+        else:
+            news_placeholder.empty()
+        
+        # Ensure we use consistent keys for the frontend components
+        pred_rv = vol_data.get("volatility_prediction", vol_data.get("har_rv", 0.0))
+        
+        # Timestamp handling
+        ts = vol_data.get("timestamp", pd.Timestamp.now(tz="UTC"))
+        if isinstance(ts, str):
+            ts = pd.to_datetime(ts)
+        
+        # Ensure timezone awareness (UTC)
+        if ts.tz is None:
+            ts = ts.tz_localize("UTC")
+        else:
+            ts = ts.tz_convert("UTC")
+
+        new_record = {
+            "timestamp": ts,
+            "har_rv": pred_rv,
+            **news_data,
+            **{k:v for k,v in vol_data.items() if k not in ["volatility_prediction", "timestamp"]} 
+        }
+        
+        import numpy as np
+        rng = np.random.default_rng()
+        
+        # Simple aggregation for display
+        actual = 0.55 * news_data["news_rv"] + 0.45 * pred_rv + rng.normal(0.0, 0.02)
+        new_record["actual_rv"] = float(max(actual, 1e-6))
+        
+        st.session_state.store.append_data(new_record)
+
+        # 2. Render
+        df = st.session_state.store.get_data(tframe)
+        
+        with main_placeholder.container():
             render_metrics(df, weight)
             render_charts(df, weight)
 
     if st.session_state.is_running:
-        _update_and_render()
-        time.sleep(refresh_rate)
-        st.rerun()
+        while True:
+            _update_and_render()
+            time.sleep(refresh_rate)
     else:
+        # Render static view if paused
         _update_and_render()
 
 if __name__ == "__main__":

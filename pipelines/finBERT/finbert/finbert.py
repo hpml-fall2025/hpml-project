@@ -16,6 +16,7 @@ import logging
 
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers import AutoTokenizer
+from peft import LoraConfig, TaskType, get_peft_model
 
 logger = logging.getLogger(__name__)
 
@@ -25,27 +26,34 @@ class Config(object):
     """The configuration class for training."""
 
     def __init__(self,
-                 data_dir,
-                 bert_model,
-                 model_dir,
-                 max_seq_length=64,
-                 train_batch_size=32,
-                 eval_batch_size=32,
-                 learning_rate=5e-5,
-                 num_train_epochs=10.0,
-                 warm_up_proportion=0.1,
-                 no_cuda=False,
-                 do_lower_case=True,
-                 seed=42,
-                 local_rank=-1,
-                 gradient_accumulation_steps=1,
-                 fp16=False,
-                 use_amp=False,
-                 output_mode='classification',
-                 discriminate=True,
-                 gradual_unfreeze=True,
-                 encoder_no=12,
-                 base_model='bert-base-uncased'):
+             data_dir,
+             bert_model,
+             model_dir,
+             max_seq_length=64,
+             train_batch_size=32,
+             eval_batch_size=32,
+             learning_rate=5e-5,
+             num_train_epochs=10.0,
+             warm_up_proportion=0.1,
+             no_cuda=False,
+             do_lower_case=True,
+             seed=42,
+             local_rank=-1,
+             gradient_accumulation_steps=1,
+             fp16=False,
+             use_amp=False,
+             output_mode='classification',
+             discriminate=True,
+             gradual_unfreeze=True,
+             encoder_no=12,
+             base_model='bert-base-uncased',
+             use_lora=False,
+             lora_r=8,
+             lora_alpha=16,
+             lora_dropout=0.05,
+             lora_target_modules=("query", "value"),
+             lora_modules_to_save=("classifier",)):
+ 
         """
         Parameters
         ----------
@@ -112,6 +120,13 @@ class Config(object):
         self.gradual_unfreeze = gradual_unfreeze
         self.encoder_no = encoder_no
         self.base_model = base_model
+
+        self.use_lora = use_lora
+        self.lora_r = lora_r
+        self.lora_alpha = lora_alpha
+        self.lora_dropout = lora_dropout
+        self.lora_target_modules = lora_target_modules
+        self.lora_modules_to_save = lora_modules_to_save
 
 
 class FinBert(object):
@@ -181,7 +196,8 @@ class FinBert(object):
         self.num_labels = len(label_list)
         self.label_list = label_list
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.base_model, do_lower_case=self.config.do_lower_case)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.config.base_model, do_lower_case=self.config.do_lower_case)
+
 
     def get_data(self, phase):
         """
@@ -223,7 +239,32 @@ class FinBert(object):
 
         model = self.config.bert_model
 
+        use_lora = getattr(self.config, "use_lora", False)
+        if use_lora:
+            # Keep old functionality available, but don’t combine these with LoRA by default.
+            self.config.discriminate = False
+            self.config.gradual_unfreeze = False
+
+
+        # --- LoRA / PEFT (optional) ---
+        if getattr(self.config, "use_lora", False):
+            lora_cfg = LoraConfig(
+                task_type=TaskType.SEQ_CLS,
+                r=self.config.lora_r,
+                lora_alpha=self.config.lora_alpha,
+                lora_dropout=self.config.lora_dropout,
+                target_modules=list(self.config.lora_target_modules),
+                bias="none",
+                modules_to_save=list(self.config.lora_modules_to_save),
+            )
+            model = get_peft_model(model, lora_cfg)
+            model.print_trainable_parameters()
+
+
         model.to(self.device)
+
+        param_optimizer = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
+
 
         # Prepare optimizer
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
@@ -237,40 +278,33 @@ class FinBert(object):
             encoder_params = []
             for i in range(12):
                 encoder_decay = {
-                    'params': [p for n, p in list(model.bert.encoder.layer[i].named_parameters()) if
-                               not any(nd in n for nd in no_decay)],
+                    'params': [p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))],
                     'weight_decay': 0.01,
                     'lr': lr / (dft_rate ** (12 - i))}
                 encoder_nodecay = {
-                    'params': [p for n, p in list(model.bert.encoder.layer[i].named_parameters()) if
-                               any(nd in n for nd in no_decay)],
+                    'params': [p for n, p in param_optimizer if (any(nd in n for nd in no_decay))],
                     'weight_decay': 0.0,
                     'lr': lr / (dft_rate ** (12 - i))}
                 encoder_params.append(encoder_decay)
                 encoder_params.append(encoder_nodecay)
 
             optimizer_grouped_parameters = [
-                {'params': [p for n, p in list(model.bert.embeddings.named_parameters()) if
-                            not any(nd in n for nd in no_decay)],
+                {'params': [p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))],
                  'weight_decay': 0.01,
                  'lr': lr / (dft_rate ** 13)},
-                {'params': [p for n, p in list(model.bert.embeddings.named_parameters()) if
-                            any(nd in n for nd in no_decay)],
+                {'params': [p for n, p in param_optimizer if (any(nd in n for nd in no_decay))],
                  'weight_decay': 0.0,
                  'lr': lr / (dft_rate ** 13)},
-                {'params': [p for n, p in list(model.bert.pooler.named_parameters()) if
-                            not any(nd in n for nd in no_decay)],
+                {'params': [p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))],
                  'weight_decay': 0.01,
                  'lr': lr},
-                {'params': [p for n, p in list(model.bert.pooler.named_parameters()) if
-                            any(nd in n for nd in no_decay)],
+                {'params': [p for n, p in param_optimizer if (any(nd in n for nd in no_decay))],
                  'weight_decay': 0.0,
                  'lr': lr},
-                {'params': [p for n, p in list(model.classifier.named_parameters()) if
-                            not any(nd in n for nd in no_decay)],
+                {'params': [p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))],
                  'weight_decay': 0.01,
                  'lr': lr},
-                {'params': [p for n, p in list(model.classifier.named_parameters()) if any(nd in n for nd in no_decay)],
+                {'params': [p for n, p in param_optimizer if (any(nd in n for nd in no_decay))],
                  'weight_decay': 0.0,
                  'lr': lr}]
 
@@ -278,18 +312,21 @@ class FinBert(object):
 
 
         else:
-            param_optimizer = list(model.named_parameters())
+            param_optimizer = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
+
 
             optimizer_grouped_parameters = [
-                {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
+                {'params': [p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))],
                  'weight_decay': 0.01},
-                {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+                {'params': [p for n, p in param_optimizer if (any(nd in n for nd in no_decay))], 'weight_decay': 0.0}
             ]
 
         schedule = "warmup_linear"
 
 
         self.num_warmup_steps = int(float(self.num_train_optimization_steps) * self.config.warm_up_proportion)
+
+        optimizer_grouped_parameters = [g for g in optimizer_grouped_parameters if len(g["params"]) > 0]
 
         self.optimizer = AdamW(optimizer_grouped_parameters,
                           lr=self.config.learning_rate)
@@ -383,6 +420,7 @@ class FinBert(object):
         step_number = len(train_dataloader)
 
         scaler = torch.cuda.amp.GradScaler(enabled=self.config.use_amp)
+        use_lora = getattr(self.config, "use_lora", False)
 
         i = 0
         for _ in trange(int(self.config.num_train_epochs), desc="Epoch"):
@@ -394,14 +432,14 @@ class FinBert(object):
 
             for step, batch in enumerate(tqdm(train_dataloader, desc='Iteration')):
 
-                if (self.config.gradual_unfreeze and i == 0):
+                if (self.config.gradual_unfreeze and i == 0 and not use_lora):
                     for param in model.bert.parameters():
                         param.requires_grad = False
 
-                if (step % (step_number // 3)) == 0:
+                if step_number >= 3 and (step % (step_number // 3)) == 0:
                     i += 1
 
-                if (self.config.gradual_unfreeze and i > 1 and i < self.config.encoder_no):
+                if (self.config.gradual_unfreeze and i > 1 and i < self.config.encoder_no and not use_lora):
 
                     for k in range(i - 1):
 
@@ -411,7 +449,7 @@ class FinBert(object):
                         except:
                             pass
 
-                if (self.config.gradual_unfreeze and i > self.config.encoder_no + 1):
+                if (self.config.gradual_unfreeze and i > self.config.encoder_no + 1 and not use_lora):
                     for param in model.bert.embeddings.parameters():
                         param.requires_grad = True
 
@@ -450,11 +488,13 @@ class FinBert(object):
                     
                     if self.config.use_amp:
                         scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        torch.nn.utils.clip_grad_norm_((p for p in model.parameters() if p.requires_grad), 1.0)
+
                         scaler.step(self.optimizer)
                         scaler.update()
                     else:
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        torch.nn.utils.clip_grad_norm_((p for p in model.parameters() if p.requires_grad), 1.0)
+
                         self.optimizer.step()
 
                     self.scheduler.step()
@@ -510,6 +550,9 @@ class FinBert(object):
         model.load_state_dict(checkpoint['state_dict'])
         model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
         output_model_file = os.path.join(self.config.model_dir, WEIGHTS_NAME)
+        if getattr(self.config, "use_lora", False):
+            model_to_save = model_to_save.merge_and_unload()
+        
         torch.save(model_to_save.state_dict(), output_model_file)
         output_config_file = os.path.join(self.config.model_dir, CONFIG_NAME)
         with open(output_config_file, 'w') as f:

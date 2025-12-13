@@ -31,6 +31,25 @@ from finbert.finbert import FinBert
 
 import time
 
+def _prof_event_time_ms(key_averages, key: str, prefer_cuda: bool) -> float:
+    """Return total time (ms) for a profiler event key from `prof.key_averages()`."""
+    for e in key_averages:
+        if getattr(e, "key", None) == key:
+            cuda_total = getattr(e, "cuda_time_total", 0) or 0
+            cpu_total = getattr(e, "cpu_time_total", 0) or 0
+            cuda_ms = cuda_total / 1000.0 if cuda_total else 0.0
+            cpu_ms = cpu_total / 1000.0 if cpu_total else 0.0
+            if prefer_cuda and cuda_ms:
+                return cuda_ms
+            return cpu_ms
+    return 0.0
+
+
+def summarize_key_averages_ms(key_averages, keys, prefer_cuda: bool, prefix: str = ""):
+    """Summarize selected profiler keys into a flat dict of `{prefix}{key}_ms: float`."""
+    return {f"{prefix}{k}_ms": _prof_event_time_ms(key_averages, k, prefer_cuda) for k in keys}
+
+
 class ProfiledFinBert(FinBert):
     """Extended FinBert class with profiling instrumentation.
     
@@ -69,6 +88,11 @@ class ProfiledFinBert(FinBert):
         print("="*80 + "\\n")
         
         i = 0
+
+        profile_steps = int(getattr(self.config, "profile_train_steps", 20) or 20)
+        # If someone passes a weird value, fall back to 20.
+        if profile_steps < 1:
+            profile_steps = 20
 
         scaler = torch.cuda.amp.GradScaler(enabled=self.config.use_amp)
         
@@ -164,13 +188,13 @@ class ProfiledFinBert(FinBert):
                             global_step += 1
                     
                     # Only profile first epoch to save time
-                    if epoch == 0 and step >= 20:
+                    if epoch == 0 and (step + 1) >= profile_steps:
                         break
                 
                 # Break after first epoch for profiling
                 if epoch == 0:
                     print("\\n" + "="*80)
-                    print("Profiling complete for first epoch (20 steps)")
+                    print(f"Profiling complete for first epoch ({profile_steps} steps)")
                     print("Continuing full training without profiling...")
                     print("="*80 + "\\n")
                     break
@@ -190,7 +214,14 @@ class ProfiledFinBert(FinBert):
         print("\\n" + "="*80 + "\\n")
         
         # Store results
-        self.profile_results['training'] = prof.key_averages()
+        ka = prof.key_averages()
+        self.profile_results['training'] = ka
+        self.profile_results['training_summary'] = summarize_key_averages_ms(
+            ka,
+            keys=["data_transfer", "forward_pass", "loss_calculation", "backward_pass", "optimizer_step"],
+            prefer_cuda=(self.device.type == "cuda"),
+            prefix="train_",
+        )
         
         # Continue with full training without profiling
         for epoch in trange(int(self.config.num_train_epochs), desc="Epoch"):
@@ -353,6 +384,9 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
             device = torch.device(gpu_name)
     else:
         device = torch.device("cpu")
+
+    # AMP autocast is only supported on CUDA in this codepath (torch.cuda.amp.*)
+    use_amp = bool(use_amp and device.type == "cuda")
     
     print_device_info(device)
     
@@ -440,22 +474,10 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
     
     # Extract profiler timings (prefer CUDA times when available on CUDA devices)
     ka = prof.key_averages()
-
-    def _event_time_ms(events, key, prefer_cuda):
-        for e in events:
-            if e.key == key:
-                # Some profiler builds may not have cuda_time_total attribute; guard access
-                cuda_ms = getattr(e, "cuda_time_total", 0) / 1000.0 if getattr(e, "cuda_time_total", 0) else 0.0
-                cpu_ms = getattr(e, "cpu_time_total", 0) / 1000.0 if getattr(e, "cpu_time_total", 0) else 0.0
-                if prefer_cuda and cuda_ms:
-                    return cuda_ms
-                return cpu_ms
-        return 0.0
-
     prefer_cuda = (device.type == "cuda")
-    tokenization_time_ms = _event_time_ms(ka, "sentence_tokenization", prefer_cuda)
-    inference_forward_time_ms = _event_time_ms(ka, "inference_forward", prefer_cuda)
-    model_to_device_time_ms = _event_time_ms(ka, "model_to_device", prefer_cuda)
+    tokenization_time_ms = _prof_event_time_ms(ka, "sentence_tokenization", prefer_cuda)
+    inference_forward_time_ms = _prof_event_time_ms(ka, "inference_forward", prefer_cuda)
+    model_to_device_time_ms = _prof_event_time_ms(ka, "model_to_device", prefer_cuda)
 
     metrics = {
         'variant': variant_name,

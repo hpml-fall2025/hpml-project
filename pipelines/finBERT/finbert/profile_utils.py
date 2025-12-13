@@ -43,9 +43,10 @@ def print_profiler_results(prof, device, title="Profiling Results"):
 def setup_nltk_data():
     """Download necessary NLTK data"""
     try:
+        import nltk
         nltk.download('punkt', quiet=True)
         nltk.download('punkt_tab', quiet=True)
-    except:
+    except Exception:
         pass
 
 

@@ -1,6 +1,48 @@
+# Byte-compiled / cache / distribution artifacts
 __pycache__/
+*.py[cod]
+*.pyc
+*$py.class
+*.egg-info/
+~*.*
+screenlog*.*
+*.DS_Store
+
+# IDEs and editors
+.idea/
+workspace.xml
+
+# Python virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+pyvenv.cfg
 bin/
 etc/
 lib/
-pyvenv.cfg
 share/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# PyBuilder
+target/
+
+# pyenv
+.python-version
+
+# mypy
+.mypy_cache/
+
+# PyCharm
+workspace.xml
+
+# Models and data
+models/
+data/
+FinancialPhraseBank-v1.0/
+

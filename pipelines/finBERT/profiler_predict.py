@@ -12,7 +12,8 @@ parser = argparse.ArgumentParser(description="Sentiment analyzer")
 parser.add_argument("-a", action="store_true", default=False)
 
 parser.add_argument("--text_path", type=str, help="Path to the text file.")
-parser.add_argument("--output_dir", type=str, help="Where to write the results")
+parser.add_argument("--output_dir", type=str,
+                    help="Where to write the results")
 parser.add_argument("--model_path", type=str, help="Path to classifier model")
 parser.add_argument("--use_gpu", action="store_true", default=False,
                     help="Use GPU/MPS for inference (auto-detected if not specified)")
@@ -41,15 +42,16 @@ else:
     device = get_device(no_cuda=False)
     use_gpu = device.type != "cpu"
     if use_gpu:
-        print(f"Auto-detected device: {device.type}, using GPU/MPS for inference")
+        print(
+            f"Auto-detected device: {device.type}, using GPU/MPS for inference")
 
 
 wandb.init(
     entity="si2449-columbia-university",
-    project="finbert-hyperparameter-sweep",
+    project="finbert-experiments",
     name="prediction",
     group="baseline"
-    )
+)
 wandb.config.update({
     "model_name": "distilbert-base-uncased",
     "gpu_used": use_gpu
@@ -86,7 +88,8 @@ for idx, row in results.iterrows():
     print(
         f"    Confidence: Positive: {positive_prob:.1f}% | Negative: {negative_prob:.1f}% | Neutral: {neutral_prob:.1f}%"
     )
-    print(f"    Sentiment Score: {row['sentiment_score']:.3f} (range: -1.0 to +1.0)")
+    print(
+        f"    Sentiment Score: {row['sentiment_score']:.3f} (range: -1.0 to +1.0)")
     print()
 
 # Print summary

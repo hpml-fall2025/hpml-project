@@ -89,6 +89,39 @@ def summarize_key_averages_ms(key_averages, keys, prefer_cuda: bool, prefix: str
     return {f"{prefix}{k}_ms": _prof_event_time_ms(key_averages, k, prefer_cuda) for k in keys}
 
 
+def log_profiler_table(key_averages, name="profiler_results"):
+    """Log profiler key averages as a W&B Table."""
+    try:
+        import wandb
+        if wandb.run is None:
+            return
+        
+        rows = []
+        # key_averages is iterable of FunctionEventAvg
+        for e in key_averages:
+            rows.append({
+                "key": e.key,
+                "cpu_time_total_ms": e.cpu_time_total / 1000.0,
+                "cuda_time_total_ms": e.cuda_time_total / 1000.0,
+                "self_cpu_time_total_ms": e.self_cpu_time_total / 1000.0,
+                "self_cuda_time_total_ms": e.self_cuda_time_total / 1000.0,
+                "cpu_memory_usage": e.cpu_memory_usage,
+                "cuda_memory_usage": e.cuda_memory_usage,
+                "count": e.count,
+            })
+        
+        # Sort by total time (cuda if available, else cpu)
+        # But wandb table allows sorting in UI.
+        
+        table = wandb.Table(data=pd.DataFrame(rows))
+        wandb.log({name: table})
+        # print(f"✓ Logged {name} table to wandb")
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"⚠ Failed to log profiler table: {e}")
+
+
 class ProfiledFinBert(FinBert):
     """Extended FinBert class with profiling instrumentation.
     
@@ -120,13 +153,13 @@ class ProfiledFinBert(FinBert):
         if self.device.type == "cuda":
             activities.append(ProfilerActivity.CUDA)
         
-        print("\\n" + "="*80)
+        print("\n" + "="*80)
         print("Starting Profiled Training")
         print(f"Device: {self.device}")
         print(f"Profiling activities: {activities}")
         if self.device.type == "mps":
             print("Note: MPS profiling shows CPU time only. Actual GPU execution time not separately tracked.")
-        print("="*80 + "\\n")
+        print("="*80 + "\n")
         
         i = 0
 
@@ -244,25 +277,25 @@ class ProfiledFinBert(FinBert):
                 
                 # Break after first epoch for profiling
                 if epoch == 0:
-                    print("\\n" + "="*80)
+                    print("\n" + "="*80)
                     print(f"Profiling complete for first epoch ({profile_steps} steps)")
                     print("Continuing full training without profiling...")
-                    print("="*80 + "\\n")
+                    print("="*80 + "\n")
                     break
         
         # Print profiler results
-        print("\\n" + "="*80)
+        print("\n" + "="*80)
         print("PROFILING RESULTS - Training")
-        print("="*80 + "\\n")
+        print("="*80 + "\n")
         
-        print("\\nBy CPU Time:")
+        print("\nBy CPU Time:")
         print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=20))
         
         if self.device.type == "cuda":
-            print("\\nBy CUDA Time:")
+            print("\nBy CUDA Time:")
             print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
         
-        print("\\n" + "="*80 + "\\n")
+        print("\n" + "="*80 + "\n")
         
         # Store results
         ka = prof.key_averages()
@@ -273,6 +306,9 @@ class ProfiledFinBert(FinBert):
             prefer_cuda=(self.device.type == "cuda"),
             prefix="train_",
         )
+
+        # Log full profiler table to W&B
+        log_profiler_table(ka, "training_profile_table")
         
         global_step, i = _restore_training_state(
             model=model,
@@ -355,6 +391,19 @@ class ProfiledFinBert(FinBert):
                     self.scheduler.step()
                     self.optimizer.zero_grad()
                     global_step += 1
+
+                    # Log training metrics to W&B if available
+                    try:
+                        import wandb
+                        if wandb.run is not None and global_step % 10 == 0:
+                            wandb.log({
+                                'train_loss': tr_loss / nb_tr_steps,
+                                'learning_rate': self.optimizer.param_groups[0]['lr'],
+                                'epoch': epoch,
+                                'step': global_step
+                            })
+                    except ImportError:
+                        pass
             
             # Validation
             validation_loader = self.get_loader(validation_examples, phase='eval')
@@ -386,6 +435,14 @@ class ProfiledFinBert(FinBert):
             valid_loss = valid_loss / nb_valid_steps
             self.validation_losses.append(valid_loss)
             print("Validation losses: {}".format(self.validation_losses))
+            
+            # Log validation loss
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb.log({'val_loss': valid_loss, 'epoch': epoch})
+            except ImportError:
+                pass
             
             if valid_loss == min(self.validation_losses):
                 try:
@@ -542,6 +599,9 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
     inference_forward_time_ms = _prof_event_time_ms(ka, "inference_forward", prefer_cuda)
     model_to_device_time_ms = _prof_event_time_ms(ka, "model_to_device", prefer_cuda)
 
+    # Log full profiler table to W&B
+    log_profiler_table(ka, "inference_profile_table")
+
     metrics = {
         'variant': variant_name,
         'total_sentences': len(sentences),
@@ -562,5 +622,3 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
         print(f"  ✓ Quantized model profiled successfully")
     
     return result, metrics
-
-

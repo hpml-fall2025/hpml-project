@@ -48,3 +48,6 @@ FinancialPhraseBank-v1.0/
 
 #mihir's csv
 SPY1min_clean.csv
+
+# wandb
+wandb/

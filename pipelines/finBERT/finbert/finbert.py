@@ -181,7 +181,7 @@ class FinBert(object):
         self.num_labels = len(label_list)
         self.label_list = label_list
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.base_model, do_lower_case=self.config.do_lower_case)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.config.base_model, do_lower_case=self.config.do_lower_case)
 
     def get_data(self, phase):
         """

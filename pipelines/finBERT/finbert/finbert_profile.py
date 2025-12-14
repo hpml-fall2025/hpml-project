@@ -31,6 +31,97 @@ from finbert.finbert import FinBert
 
 import time
 
+import copy
+
+def _snapshot_requires_grad(model):
+    return {name: p.requires_grad for name, p in model.named_parameters()}
+
+def _restore_requires_grad(model, req):
+    for name, p in model.named_parameters():
+        if name in req:
+            p.requires_grad = req[name]
+
+def _snapshot_training_state(model, optimizer, scheduler, global_step, i, device):
+    snap = {
+        "model": copy.deepcopy(model.state_dict()),
+        "optimizer": copy.deepcopy(optimizer.state_dict()),
+        "scheduler": copy.deepcopy(scheduler.state_dict()),
+        "global_step": global_step,
+        "i": i,
+        # RNG states for determinism
+        "py_random": random.getstate(),
+        "np_random": np.random.get_state(),
+        "torch_cpu": torch.random.get_rng_state(),
+        "requires_grad": _snapshot_requires_grad(model)
+    }
+    if device.type == "cuda":
+        snap["torch_cuda"] = torch.cuda.get_rng_state_all()
+    return snap
+
+def _restore_training_state(model, optimizer, scheduler, snap, device):
+    model.load_state_dict(snap["model"])
+    _restore_requires_grad(model, snap["requires_grad"])
+    optimizer.load_state_dict(snap["optimizer"])
+    scheduler.load_state_dict(snap["scheduler"])
+    random.setstate(snap["py_random"])
+    np.random.set_state(snap["np_random"])
+    torch.random.set_rng_state(snap["torch_cpu"])
+    if device.type == "cuda":
+        torch.cuda.set_rng_state_all(snap["torch_cuda"])
+    return snap["global_step"], snap["i"]
+
+def _prof_event_time_ms(key_averages, key: str, prefer_cuda: bool) -> float:
+    """Return total time (ms) for a profiler event key from `prof.key_averages()`."""
+    for e in key_averages:
+        if getattr(e, "key", None) == key:
+            cuda_total = getattr(e, "cuda_time_total", 0) or 0
+            cpu_total = getattr(e, "cpu_time_total", 0) or 0
+            cuda_ms = cuda_total / 1000.0 if cuda_total else 0.0
+            cpu_ms = cpu_total / 1000.0 if cpu_total else 0.0
+            if prefer_cuda and cuda_ms:
+                return cuda_ms
+            return cpu_ms
+    return 0.0
+
+
+def summarize_key_averages_ms(key_averages, keys, prefer_cuda: bool, prefix: str = ""):
+    """Summarize selected profiler keys into a flat dict of `{prefix}{key}_ms: float`."""
+    return {f"{prefix}{k}_ms": _prof_event_time_ms(key_averages, k, prefer_cuda) for k in keys}
+
+
+def log_profiler_table(key_averages, name="profiler_results"):
+    """Log profiler key averages as a W&B Table."""
+    try:
+        import wandb
+        if wandb.run is None:
+            return
+        
+        rows = []
+        # key_averages is iterable of FunctionEventAvg
+        for e in key_averages:
+            rows.append({
+                "key": e.key,
+                "cpu_time_total_ms": e.cpu_time_total / 1000.0,
+                "cuda_time_total_ms": e.cuda_time_total / 1000.0,
+                "self_cpu_time_total_ms": e.self_cpu_time_total / 1000.0,
+                "self_cuda_time_total_ms": e.self_cuda_time_total / 1000.0,
+                "cpu_memory_usage": e.cpu_memory_usage,
+                "cuda_memory_usage": e.cuda_memory_usage,
+                "count": e.count,
+            })
+        
+        # Sort by total time (cuda if available, else cpu)
+        # But wandb table allows sorting in UI.
+        
+        table = wandb.Table(data=pd.DataFrame(rows))
+        wandb.log({name: table})
+        # print(f"✓ Logged {name} table to wandb")
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"⚠ Failed to log profiler table: {e}")
+
+
 class ProfiledFinBert(FinBert):
     """Extended FinBert class with profiling instrumentation.
     
@@ -52,7 +143,9 @@ class ProfiledFinBert(FinBert):
         
         # Training
         train_dataloader = self.get_loader(train_examples, 'train')
+        
         model.train()
+        
         step_number = len(train_dataloader)
         
         # Setup profiler - CUDA profiling only works with NVIDIA GPUs, not MPS
@@ -60,17 +153,32 @@ class ProfiledFinBert(FinBert):
         if self.device.type == "cuda":
             activities.append(ProfilerActivity.CUDA)
         
-        print("\\n" + "="*80)
+        print("\n" + "="*80)
         print("Starting Profiled Training")
         print(f"Device: {self.device}")
         print(f"Profiling activities: {activities}")
         if self.device.type == "mps":
             print("Note: MPS profiling shows CPU time only. Actual GPU execution time not separately tracked.")
-        print("="*80 + "\\n")
+        print("="*80 + "\n")
         
         i = 0
 
+        profile_steps = int(getattr(self.config, "profile_train_steps", 20) or 20)
+        # If someone passes a weird value, fall back to 20.
+        if profile_steps < 1:
+            profile_steps = 20
+
         scaler = torch.cuda.amp.GradScaler(enabled=self.config.use_amp)
+        
+        
+        snap = _snapshot_training_state(
+            model=model,
+            optimizer=self.optimizer,
+            scheduler=self.scheduler,
+            global_step=global_step,
+            i=i,
+            device=self.device,
+        )
         
         with profile(
             activities=activities,
@@ -164,35 +272,54 @@ class ProfiledFinBert(FinBert):
                             global_step += 1
                     
                     # Only profile first epoch to save time
-                    if epoch == 0 and step >= 20:
+                    if epoch == 0 and (step + 1) >= profile_steps:
                         break
                 
                 # Break after first epoch for profiling
                 if epoch == 0:
-                    print("\\n" + "="*80)
-                    print("Profiling complete for first epoch (20 steps)")
+                    print("\n" + "="*80)
+                    print(f"Profiling complete for first epoch ({profile_steps} steps)")
                     print("Continuing full training without profiling...")
-                    print("="*80 + "\\n")
+                    print("="*80 + "\n")
                     break
         
         # Print profiler results
-        print("\\n" + "="*80)
+        print("\n" + "="*80)
         print("PROFILING RESULTS - Training")
-        print("="*80 + "\\n")
+        print("="*80 + "\n")
         
-        print("\\nBy CPU Time:")
+        print("\nBy CPU Time:")
         print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=20))
         
         if self.device.type == "cuda":
-            print("\\nBy CUDA Time:")
+            print("\nBy CUDA Time:")
             print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
         
-        print("\\n" + "="*80 + "\\n")
+        print("\n" + "="*80 + "\n")
         
         # Store results
-        self.profile_results['training'] = prof.key_averages()
+        ka = prof.key_averages()
+        self.profile_results['training'] = ka
+        self.profile_results['training_summary'] = summarize_key_averages_ms(
+            ka,
+            keys=["data_transfer", "forward_pass", "loss_calculation", "backward_pass", "optimizer_step"],
+            prefer_cuda=(self.device.type == "cuda"),
+            prefix="train_",
+        )
+
+        # Log full profiler table to W&B
+        log_profiler_table(ka, "training_profile_table")
         
-        # Continue with full training without profiling
+        global_step, i = _restore_training_state(
+            model=model,
+            optimizer=self.optimizer,
+            scheduler=self.scheduler,
+            snap=snap,
+            device=self.device,
+        )
+
+
+        self.optimizer.zero_grad(set_to_none=True)
         for epoch in trange(int(self.config.num_train_epochs), desc="Epoch"):
             model.train()
             tr_loss = 0
@@ -264,6 +391,19 @@ class ProfiledFinBert(FinBert):
                     self.scheduler.step()
                     self.optimizer.zero_grad()
                     global_step += 1
+
+                    # Log training metrics to W&B if available
+                    try:
+                        import wandb
+                        if wandb.run is not None and global_step % 10 == 0:
+                            wandb.log({
+                                'train_loss': tr_loss / nb_tr_steps,
+                                'learning_rate': self.optimizer.param_groups[0]['lr'],
+                                'epoch': epoch,
+                                'step': global_step
+                            })
+                    except ImportError:
+                        pass
             
             # Validation
             validation_loader = self.get_loader(validation_examples, phase='eval')
@@ -296,14 +436,22 @@ class ProfiledFinBert(FinBert):
             self.validation_losses.append(valid_loss)
             print("Validation losses: {}".format(self.validation_losses))
             
+            # Log validation loss
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb.log({'val_loss': valid_loss, 'epoch': epoch})
+            except ImportError:
+                pass
+            
             if valid_loss == min(self.validation_losses):
                 try:
                     os.remove(self.config.model_dir / ('temporary' + str(best_model)))
                 except:
                     print('No best model found')
-                torch.save({'epoch': str(epoch), 'state_dict': model.state_dict()},
-                           self.config.model_dir / ('temporary' + str(epoch)))
-                best_model = epoch
+                torch.save({'epoch': str(i), 'state_dict': model.state_dict()},
+                           self.config.model_dir / ('temporary' + str(i)))
+                best_model = i
         
         # Save the trained model
         checkpoint = torch.load(self.config.model_dir / ('temporary' + str(best_model)))
@@ -315,6 +463,9 @@ class ProfiledFinBert(FinBert):
         with open(output_config_file, 'w') as f:
             f.write(model_to_save.config.to_json_string())
         os.remove(self.config.model_dir / ('temporary' + str(best_model)))
+        
+        
+        
         
         return model
 
@@ -353,6 +504,9 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
             device = torch.device(gpu_name)
     else:
         device = torch.device("cpu")
+
+    # AMP autocast is only supported on CUDA in this codepath (torch.cuda.amp.*)
+    use_amp = bool(use_amp and device.type == "cuda")
     
     print_device_info(device)
     
@@ -440,22 +594,13 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
     
     # Extract profiler timings (prefer CUDA times when available on CUDA devices)
     ka = prof.key_averages()
-
-    def _event_time_ms(events, key, prefer_cuda):
-        for e in events:
-            if e.key == key:
-                # Some profiler builds may not have cuda_time_total attribute; guard access
-                cuda_ms = getattr(e, "cuda_time_total", 0) / 1000.0 if getattr(e, "cuda_time_total", 0) else 0.0
-                cpu_ms = getattr(e, "cpu_time_total", 0) / 1000.0 if getattr(e, "cpu_time_total", 0) else 0.0
-                if prefer_cuda and cuda_ms:
-                    return cuda_ms
-                return cpu_ms
-        return 0.0
-
     prefer_cuda = (device.type == "cuda")
-    tokenization_time_ms = _event_time_ms(ka, "sentence_tokenization", prefer_cuda)
-    inference_forward_time_ms = _event_time_ms(ka, "inference_forward", prefer_cuda)
-    model_to_device_time_ms = _event_time_ms(ka, "model_to_device", prefer_cuda)
+    tokenization_time_ms = _prof_event_time_ms(ka, "sentence_tokenization", prefer_cuda)
+    inference_forward_time_ms = _prof_event_time_ms(ka, "inference_forward", prefer_cuda)
+    model_to_device_time_ms = _prof_event_time_ms(ka, "model_to_device", prefer_cuda)
+
+    # Log full profiler table to W&B
+    log_profiler_table(ka, "inference_profile_table")
 
     metrics = {
         'variant': variant_name,
@@ -477,5 +622,3 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
         print(f"  ✓ Quantized model profiled successfully")
     
     return result, metrics
-
-

@@ -71,7 +71,9 @@ class ProfiledFinBert(FinBert):
         
         # Training
         train_dataloader = self.get_loader(train_examples, 'train')
+        
         model.train()
+        
         step_number = len(train_dataloader)
         
         # Setup profiler - CUDA profiling only works with NVIDIA GPUs, not MPS
@@ -224,6 +226,12 @@ class ProfiledFinBert(FinBert):
         )
         
         # Continue with full training without profiling
+        # Reset the gradual-unfreeze counter so the unfreeze schedule for the
+        # full training run matches the non-profiled `FinBert.train` behavior.
+        # During the lightweight profiled steps above `i` may have been
+        # incremented, which would change which layers are frozen during the
+        # subsequent full training and can harm final accuracy.
+        i = 0
         for epoch in trange(int(self.config.num_train_epochs), desc="Epoch"):
             model.train()
             tr_loss = 0

@@ -392,9 +392,9 @@ class ProfiledFinBert(FinBert):
                     os.remove(self.config.model_dir / ('temporary' + str(best_model)))
                 except:
                     print('No best model found')
-                torch.save({'epoch': str(epoch), 'state_dict': model.state_dict()},
-                           self.config.model_dir / ('temporary' + str(epoch)))
-                best_model = epoch
+                torch.save({'epoch': str(i), 'state_dict': model.state_dict()},
+                           self.config.model_dir / ('temporary' + str(i)))
+                best_model = i
         
         # Save the trained model
         checkpoint = torch.load(self.config.model_dir / ('temporary' + str(best_model)))
@@ -406,6 +406,9 @@ class ProfiledFinBert(FinBert):
         with open(output_config_file, 'w') as f:
             f.write(model_to_save.config.to_json_string())
         os.remove(self.config.model_dir / ('temporary' + str(best_model)))
+        
+        
+        
         
         return model
 

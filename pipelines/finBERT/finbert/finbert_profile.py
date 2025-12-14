@@ -31,6 +31,45 @@ from finbert.finbert import FinBert
 
 import time
 
+import copy
+
+def _snapshot_requires_grad(model):
+    return {name: p.requires_grad for name, p in model.named_parameters()}
+
+def _restore_requires_grad(model, req):
+    for name, p in model.named_parameters():
+        if name in req:
+            p.requires_grad = req[name]
+
+def _snapshot_training_state(model, optimizer, scheduler, global_step, i, device):
+    snap = {
+        "model": copy.deepcopy(model.state_dict()),
+        "optimizer": copy.deepcopy(optimizer.state_dict()),
+        "scheduler": copy.deepcopy(scheduler.state_dict()),
+        "global_step": global_step,
+        "i": i,
+        # RNG states for determinism
+        "py_random": random.getstate(),
+        "np_random": np.random.get_state(),
+        "torch_cpu": torch.random.get_rng_state(),
+        "requires_grad": _snapshot_requires_grad(model)
+    }
+    if device.type == "cuda":
+        snap["torch_cuda"] = torch.cuda.get_rng_state_all()
+    return snap
+
+def _restore_training_state(model, optimizer, scheduler, snap, device):
+    model.load_state_dict(snap["model"])
+    _restore_requires_grad(model, snap["requires_grad"])
+    optimizer.load_state_dict(snap["optimizer"])
+    scheduler.load_state_dict(snap["scheduler"])
+    random.setstate(snap["py_random"])
+    np.random.set_state(snap["np_random"])
+    torch.random.set_rng_state(snap["torch_cpu"])
+    if device.type == "cuda":
+        torch.cuda.set_rng_state_all(snap["torch_cuda"])
+    return snap["global_step"], snap["i"]
+
 def _prof_event_time_ms(key_averages, key: str, prefer_cuda: bool) -> float:
     """Return total time (ms) for a profiler event key from `prof.key_averages()`."""
     for e in key_averages:
@@ -97,6 +136,16 @@ class ProfiledFinBert(FinBert):
             profile_steps = 20
 
         scaler = torch.cuda.amp.GradScaler(enabled=self.config.use_amp)
+        
+        
+        snap = _snapshot_training_state(
+            model=model,
+            optimizer=self.optimizer,
+            scheduler=self.scheduler,
+            global_step=global_step,
+            i=i,
+            device=self.device,
+        )
         
         with profile(
             activities=activities,
@@ -225,13 +274,16 @@ class ProfiledFinBert(FinBert):
             prefix="train_",
         )
         
-        # Continue with full training without profiling
-        # Reset the gradual-unfreeze counter so the unfreeze schedule for the
-        # full training run matches the non-profiled `FinBert.train` behavior.
-        # During the lightweight profiled steps above `i` may have been
-        # incremented, which would change which layers are frozen during the
-        # subsequent full training and can harm final accuracy.
-        i = 0
+        global_step, i = _restore_training_state(
+            model=model,
+            optimizer=self.optimizer,
+            scheduler=self.scheduler,
+            snap=snap,
+            device=self.device,
+        )
+
+
+        self.optimizer.zero_grad(set_to_none=True)
         for epoch in trange(int(self.config.num_train_epochs), desc="Epoch"):
             model.train()
             tr_loss = 0

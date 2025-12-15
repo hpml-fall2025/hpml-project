@@ -25,6 +25,8 @@ bin/
 etc/
 lib/
 share/
+SPY1min_clean.csv
+
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints

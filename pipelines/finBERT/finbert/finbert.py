@@ -167,6 +167,9 @@ class FinBert(object):
         random.seed(self.config.seed)
         np.random.seed(self.config.seed)
         torch.manual_seed(self.config.seed)
+        if self.device.type == "cuda" and self.n_gpu > 0:
+            torch.cuda.manual_seed_all(self.config.seed)
+
 
         # Set seed for CUDA devices (MPS doesn't have manual_seed_all)
         if self.device.type == "cuda" and self.n_gpu > 0:

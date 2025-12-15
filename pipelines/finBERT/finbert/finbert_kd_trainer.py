@@ -162,335 +162,298 @@ class KDFinBert():
 
         return examples
 
-    
+    def create_the_model(self):
+        """
+        Sets up teacher/student on device, freezes teacher, and builds optimizer/scheduler for student.
+        Keeps the FinBERT optimizer/scheduler pattern (no discriminate grouping here to keep it simple & stable).
+        """
+        teacher = self.teacher.to(self.device)
+        student = self.student.to(self.device)
+
+        # Teacher frozen
+        teacher.eval()
+        for p in teacher.parameters():
+            p.requires_grad = False
+
+        # Student trainable
+        student.train()
+
+        no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
+        
+        #did non discriminative 
+        param_optimizer = list(student.named_parameters())
+        optimizer_grouped_parameters = [
+            {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], "weight_decay": 0.01},
+            {"params": [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
+        ]
+
+        self.num_warmup_steps = int(float(self.num_train_optimization_steps) * self.config.warm_up_proportion)
+
+        self.optimizer = AdamW(optimizer_grouped_parameters, lr=self.config.learning_rate)
+        self.scheduler = get_linear_schedule_with_warmup(
+            self.optimizer,
+            num_warmup_steps=self.num_warmup_steps,
+            num_training_steps=self.num_train_optimization_steps,
+        )
+
+        return teacher, student
+
+
     #logits: (batch_size, num_classes)
     #labels: (batch_size)
-    def loss_fn(self, model, logits_student, labels, inputs):
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        inputs is expected to include:
+          input_ids, attention_mask, token_type_ids, labels
+        """
+
+        outputs_student = model(**inputs)
+
+        if self.config.output_mode == "classification" and hasattr(self, "class_weights"):
+            weights = self.class_weights.to(self.device)
+            loss_fct = CrossEntropyLoss(weight=weights)
+            student_loss = loss_fct(outputs_student.logits.view(-1, self.num_labels), inputs["labels"].view(-1))
+
         with torch.no_grad():
-          logits_teacher = self.teacher(**inputs)[0]
-        
-        assert logits_student.size() == logits_teacher.size()
+            outputs_teacher = self.teacher(**inputs)
+
+        assert outputs_student.logits.size() == outputs_teacher.logits.size()
+
+        # soften probabilities and compute distillation loss
         loss_function = KLDivLoss(reduction="batchmean")
-        loss_logits = (loss_function(
-            F.log_softmax(logits_student / self.temperature, dim=-1),
-            F.softmax(logits_student / self.temperature, dim=-1)) * (self.temperature ** 2))
-        # Return weighted student loss
-        loss = self.alpha * loss_function + (1. - self.alpha) * loss_logits
-        return loss
+        T = float(self.config.temperature)
+        loss_logits = (
+            loss_function(
+                F.log_softmax(outputs_student.logits / T, dim=-1),
+                F.softmax(outputs_teacher.logits / T, dim=-1),
+            )
+            * (T ** 2)
+        )
+
+        alpha = float(self.config.alpha)
+        loss = alpha * student_loss + (1.0 - alpha) * loss_logits
+
+        return (loss, outputs_student) if return_outputs else loss
+
     
-    def train(self, train_examples, model):
-        """
-        Trains the model with profiling instrumentation.
-        """
-        
-        self.teacher.to(self.device)
-        self.teacher.eval()
-        
-        validation_examples = self.get_data('validation')
+    def train(self, train_examples, teacher, student):
+
+        validation_examples = self.get_data("validation")
         global_step = 0
         self.validation_losses = []
         
-        # Training
-        train_dataloader = self.get_loader(train_examples, 'train')
+        train_dataloader = self.get_loader(train_examples, "train")
+
+        teacher.eval()
+        for p in teacher.parameters():
+            p.requires_grad = False
         
-        model.train()
+        student.train()
         
         step_number = len(train_dataloader)
-        
-        # Setup profiler - CUDA profiling only works with NVIDIA GPUs, not MPS
+
         activities = [ProfilerActivity.CPU]
         if self.device.type == "cuda":
             activities.append(ProfilerActivity.CUDA)
-        
-        print("\\n" + "="*80)
-        print("Starting Profiled Training")
-        print(f"Device: {self.device}")
-        print(f"Profiling activities: {activities}")
-        if self.device.type == "mps":
-            print("Note: MPS profiling shows CPU time only. Actual GPU execution time not separately tracked.")
-        print("="*80 + "\\n")
-        
-        i = 0
 
         profile_steps = int(getattr(self.config, "profile_train_steps", 20) or 20)
-        # If someone passes a weird value, fall back to 20.
         if profile_steps < 1:
             profile_steps = 20
 
         scaler = torch.cuda.amp.GradScaler(enabled=self.config.use_amp)
-        
-        
+
+
+        best_model = None
+
+        # Snapshot: so profiling run doesn't change the "real" training trajectory
+        i = 0
         snap = _snapshot_training_state(
-            model=model,
+            student=student,
             optimizer=self.optimizer,
             scheduler=self.scheduler,
             global_step=global_step,
             i=i,
             device=self.device,
         )
-        
+
         with profile(
             activities=activities,
             record_shapes=True,
             profile_memory=True,
-            with_stack=False
+            with_stack=False,
         ) as prof:
-            
+
             for epoch in trange(int(self.config.num_train_epochs), desc="Epoch"):
-                model.train()
-                tr_loss = 0
-                nb_tr_examples, nb_tr_steps = 0, 0
-                
-                for step, batch in enumerate(tqdm(train_dataloader, desc='Iteration')):
-                    
-                    # Gradual unfreezing logic
-                    if (self.config.gradual_unfreeze and i == 0):
-                        for param in model.bert.parameters():
-                            param.requires_grad = False
-                    
-                    if (step % (step_number // 3)) == 0:
-                        i += 1
-                    
-                    if (self.config.gradual_unfreeze and i > 1 and i < self.config.encoder_no):
-                        for k in range(i - 1):
-                            try:
-                                for param in model.bert.encoder.layer[self.config.encoder_no - 1 - k].parameters():
-                                    param.requires_grad = True
-                            except:
-                                pass
-                    
-                    if (self.config.gradual_unfreeze and i > self.config.encoder_no + 1):
-                        for param in model.bert.embeddings.parameters():
-                            param.requires_grad = True
-                    
-                    # Data loading profiling
+                student.train()
+                teacher.eval()
+
+                for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
                     with record_function("data_transfer"):
                         batch = tuple(t.to(self.device) for t in batch)
                         input_ids, attention_mask, token_type_ids, label_ids, agree_ids = batch
-                    
-                    # Forward pass profiling
+
+                        inputs = {
+                            "input_ids": input_ids,
+                            "attention_mask": attention_mask,
+                            "token_type_ids": token_type_ids,
+                            "labels": label_ids,
+                        }
+
                     with record_function("forward_pass"):
+                        # forward pass is inside compute_loss (student + teacher)
+                        # but we keep this wrapper for consistent block timing
                         with torch.cuda.amp.autocast(enabled=self.config.use_amp):
-                            logits = model(input_ids, attention_mask, token_type_ids)[0]
-                    
-                    # Loss calculation profiling
-                    with record_function("loss_calculation"):
-                        with torch.cuda.amp.autocast(enabled=self.config.use_amp):
-                            weights = self.class_weights.to(self.device)
-                            if self.config.output_mode == "classification":
-                                loss_fct = CrossEntropyLoss(weight=weights)
-                                loss = loss_fct(logits.view(-1, self.num_labels), label_ids.view(-1))
-                            elif self.config.output_mode == "regression":
-                                loss_fct = MSELoss()
-                                loss = loss_fct(logits.view(-1), label_ids.view(-1))
-                            
+                            loss = self.compute_loss(student, inputs, return_outputs=False)
                             if self.config.gradient_accumulation_steps > 1:
                                 loss = loss / self.config.gradient_accumulation_steps
-                    
-                    # Backward pass profiling
+
                     with record_function("backward_pass"):
                         if self.config.use_amp:
                             scaler.scale(loss).backward()
                         else:
                             loss.backward()
-                    
-                    tr_loss += loss.item()
-                    nb_tr_examples += input_ids.size(0)
-                    nb_tr_steps += 1
-                    
-                    # Optimizer step profiling
+
                     if (step + 1) % self.config.gradient_accumulation_steps == 0:
                         with record_function("optimizer_step"):
-                            if self.config.fp16:
-                                lr_this_step = self.config.learning_rate * warmup_linear(
-                                    global_step / self.num_train_optimization_steps, self.config.warm_up_proportion)
-                                for param_group in self.optimizer.param_groups:
-                                    param_group['lr'] = lr_this_step
-                            
                             if self.config.use_amp:
                                 scaler.unscale_(self.optimizer)
-                                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                                torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
                                 scaler.step(self.optimizer)
                                 scaler.update()
                             else:
-                                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                                torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
                                 self.optimizer.step()
-                                
+
                             self.scheduler.step()
                             self.optimizer.zero_grad()
                             global_step += 1
-                    
-                    # Only profile first epoch to save time
-                    if epoch == 0 and (step + 1) >= profile_steps:
+
+                    # Stop after N optimizer steps (not micro-steps)
+                    if epoch == 0 and global_step >= profile_steps:
                         break
-                
-                # Break after first epoch for profiling
-                if epoch == 0:
-                    print("\\n" + "="*80)
-                    print(f"Profiling complete for first epoch ({profile_steps} steps)")
-                    print("Continuing full training without profiling...")
-                    print("="*80 + "\\n")
+
+                if epoch == 0 and global_step >= profile_steps:
                     break
-        
-        # Print profiler results
-        print("\\n" + "="*80)
-        print("PROFILING RESULTS - Training")
-        print("="*80 + "\\n")
-        
-        print("\\nBy CPU Time:")
-        print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=20))
-        
-        if self.device.type == "cuda":
-            print("\\nBy CUDA Time:")
-            print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
-        
-        print("\\n" + "="*80 + "\\n")
-        
-        # Store results
+
+        # Store profile summary like ProfiledFinBert
         ka = prof.key_averages()
-        self.profile_results['training'] = ka
-        self.profile_results['training_summary'] = summarize_key_averages_ms(
+        self.profile_results["training"] = ka
+        self.profile_results["training_summary"] = summarize_key_averages_ms(
             ka,
-            keys=["data_transfer", "forward_pass", "loss_calculation", "backward_pass", "optimizer_step"],
+            keys=["data_transfer", "forward_pass", "backward_pass", "optimizer_step"],
             prefer_cuda=(self.device.type == "cuda"),
             prefix="train_",
         )
-        
+
         global_step, i = _restore_training_state(
-            model=model,
+            student=student,
             optimizer=self.optimizer,
             scheduler=self.scheduler,
             snap=snap,
             device=self.device,
         )
 
-
         self.optimizer.zero_grad(set_to_none=True)
+
+
         for epoch in trange(int(self.config.num_train_epochs), desc="Epoch"):
-            model.train()
-            tr_loss = 0
-            nb_tr_examples, nb_tr_steps = 0, 0
-            
-            for step, batch in enumerate(tqdm(train_dataloader, desc='Iteration')):
-                
-                if (self.config.gradual_unfreeze and i == 0):
-                    for param in model.bert.parameters():
-                        param.requires_grad = False
-                
-                if (step % (step_number // 3)) == 0:
-                    i += 1
-                
-                if (self.config.gradual_unfreeze and i > 1 and i < self.config.encoder_no):
-                    for k in range(i - 1):
-                        try:
-                            for param in model.bert.encoder.layer[self.config.encoder_no - 1 - k].parameters():
-                                param.requires_grad = True
-                        except:
-                            pass
-                
-                if (self.config.gradual_unfreeze and i > self.config.encoder_no + 1):
-                    for param in model.bert.embeddings.parameters():
-                        param.requires_grad = True
-                
+            student.train()
+            teacher.eval()
+
+            for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
                 batch = tuple(t.to(self.device) for t in batch)
                 input_ids, attention_mask, token_type_ids, label_ids, agree_ids = batch
-                
+
+                inputs = {
+                    "input_ids": input_ids,
+                    "attention_mask": attention_mask,
+                    "token_type_ids": token_type_ids,
+                    "labels": label_ids,
+                }
+
                 with torch.cuda.amp.autocast(enabled=self.config.use_amp):
-                    logits = model(input_ids, attention_mask, token_type_ids)[0]
-                    weights = self.class_weights.to(self.device)
-                    
-                    if self.config.output_mode == "classification":
-                        loss_fct = CrossEntropyLoss(weight=weights)
-                        loss = loss_fct(logits.view(-1, self.num_labels), label_ids.view(-1))
-                    elif self.config.output_mode == "regression":
-                        loss_fct = MSELoss()
-                        loss = loss_fct(logits.view(-1), label_ids.view(-1))
-                    
+                    loss = self.compute_loss(student, inputs, return_outputs=False)
                     if self.config.gradient_accumulation_steps > 1:
                         loss = loss / self.config.gradient_accumulation_steps
-                
+
                 if self.config.use_amp:
                     scaler.scale(loss).backward()
                 else:
                     loss.backward()
-                
-                tr_loss += loss.item()
-                nb_tr_examples += input_ids.size(0)
-                nb_tr_steps += 1
-                
+
                 if (step + 1) % self.config.gradient_accumulation_steps == 0:
-                    if self.config.fp16:
-                        lr_this_step = self.config.learning_rate * warmup_linear(
-                            global_step / self.num_train_optimization_steps, self.config.warm_up_proportion)
-                        for param_group in self.optimizer.param_groups:
-                            param_group['lr'] = lr_this_step
-                    
                     if self.config.use_amp:
                         scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
                         scaler.step(self.optimizer)
                         scaler.update()
                     else:
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
                         self.optimizer.step()
 
                     self.scheduler.step()
                     self.optimizer.zero_grad()
                     global_step += 1
-            
-            # Validation
-            validation_loader = self.get_loader(validation_examples, phase='eval')
-            model.eval()
-            
-            valid_loss, valid_accuracy = 0, 0
-            nb_valid_steps, nb_valid_examples = 0, 0
-            
-            for input_ids, attention_mask, token_type_ids, label_ids, agree_ids in tqdm(validation_loader, desc="Validating"):
-                input_ids = input_ids.to(self.device)
-                attention_mask = attention_mask.to(self.device)
-                token_type_ids = token_type_ids.to(self.device)
-                label_ids = label_ids.to(self.device)
-                agree_ids = agree_ids.to(self.device)
-                
-                with torch.no_grad():
-                    logits = model(input_ids, attention_mask, token_type_ids)[0]
-                    
-                    if self.config.output_mode == "classification":
-                        loss_fct = CrossEntropyLoss(weight=weights)
-                        tmp_valid_loss = loss_fct(logits.view(-1, self.num_labels), label_ids.view(-1))
-                    elif self.config.output_mode == "regression":
-                        loss_fct = MSELoss()
-                        tmp_valid_loss = loss_fct(logits.view(-1), label_ids.view(-1))
-                    
-                    valid_loss += tmp_valid_loss.mean().item()
-                    nb_valid_steps += 1
-            
-            valid_loss = valid_loss / nb_valid_steps
-            self.validation_losses.append(valid_loss)
-            print("Validation losses: {}".format(self.validation_losses))
-            
-            if valid_loss == min(self.validation_losses):
-                try:
-                    os.remove(self.config.model_dir / ('temporary' + str(best_model)))
-                except:
-                    print('No best model found')
-                torch.save({'epoch': str(epoch), 'state_dict': model.state_dict()},
-                           self.config.model_dir / ('temporary' + str(epoch)))
-                best_model = epoch
-        
-        # Save the trained model
-        checkpoint = torch.load(self.config.model_dir / ('temporary' + str(best_model)))
-        model.load_state_dict(checkpoint['state_dict'])
-        model_to_save = model.module if hasattr(model, 'module') else model
-        output_model_file = os.path.join(self.config.model_dir, WEIGHTS_NAME)
-        torch.save(model_to_save.state_dict(), output_model_file)
-        output_config_file = os.path.join(self.config.model_dir, CONFIG_NAME)
-        with open(output_config_file, 'w') as f:
-            f.write(model_to_save.config.to_json_string())
-        os.remove(self.config.model_dir / ('temporary' + str(best_model)))
-        
-        return model
 
+            validation_loader = self.get_loader(validation_examples, phase="eval")
+            student.eval()
+
+            valid_loss = 0.0
+            nb_valid_steps = 0
+
+            weights = self.class_weights.to(self.device) if hasattr(self, "class_weights") else None
+
+            for batch in tqdm(validation_loader, desc="Validating"):
+                input_ids, attention_mask, token_type_ids, label_ids, agree_ids = (t.to(self.device) for t in batch)
+                with torch.no_grad():
+                    outputs = student(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        token_type_ids=token_type_ids,
+                    )
+                    logits = outputs.logits
+
+                    if self.config.output_mode == "classification":
+                        if weights is not None:
+                            loss_fct = torch.nn.CrossEntropyLoss(weight=weights)
+                        else:
+                            loss_fct = torch.nn.CrossEntropyLoss()
+                        tmp_valid_loss = loss_fct(logits.view(-1, self.num_labels), label_ids.view(-1))
+                    else:
+                        loss_fct = torch.nn.MSELoss()
+                        tmp_valid_loss = loss_fct(logits.view(-1), label_ids.view(-1))
+
+                    valid_loss += float(tmp_valid_loss.mean().item())
+                    nb_valid_steps += 1
+
+            valid_loss = valid_loss / max(1, nb_valid_steps)
+            self.validation_losses.append(valid_loss)
+            print("Validation losses:", self.validation_losses)
+
+            if valid_loss == min(self.validation_losses):
+                # remove previous best
+                if best_model is not None:
+                    try:
+                        os.remove(os.path.join(self.config.model_dir, f"temporary{best_model}"))
+                    except Exception:
+                        pass
+
+                torch.save(
+                    {"epoch": str(epoch), "state_dict": student.state_dict()},
+                    os.path.join(self.config.model_dir, f"temporary{epoch}"),
+                )
+                best_model = epoch
+
+        ckpt = torch.load(os.path.join(self.config.model_dir, f"temporary{best_model}"), map_location="cpu")
+        student.load_state_dict(ckpt["state_dict"])
+
+        student_to_save = student.module if hasattr(student, "module") else student
+        torch.save(student_to_save.state_dict(), os.path.join(self.config.model_dir, WEIGHTS_NAME))
+        with open(os.path.join(self.config.model_dir, CONFIG_NAME), "w") as f:
+            f.write(student_to_save.config.to_json_string())
+
+        os.remove(os.path.join(self.config.model_dir, f"temporary{best_model}"))
+        return student
 
 
 

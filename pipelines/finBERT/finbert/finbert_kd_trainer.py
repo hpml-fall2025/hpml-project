@@ -42,26 +42,25 @@ def _restore_requires_grad(model, req):
         if name in req:
             p.requires_grad = req[name]
 
-def _snapshot_training_state(model, optimizer, scheduler, global_step, i, device):
+def _snapshot_training_state(student, optimizer, scheduler, global_step, i, device):
     snap = {
-        "model": copy.deepcopy(model.state_dict()),
+        "student": copy.deepcopy(student.state_dict()),
         "optimizer": copy.deepcopy(optimizer.state_dict()),
         "scheduler": copy.deepcopy(scheduler.state_dict()),
         "global_step": global_step,
         "i": i,
-        # RNG states for determinism
         "py_random": random.getstate(),
         "np_random": np.random.get_state(),
         "torch_cpu": torch.random.get_rng_state(),
-        "requires_grad": _snapshot_requires_grad(model)
+        "requires_grad": _snapshot_requires_grad(student),
     }
     if device.type == "cuda":
         snap["torch_cuda"] = torch.cuda.get_rng_state_all()
     return snap
 
-def _restore_training_state(model, optimizer, scheduler, snap, device):
-    model.load_state_dict(snap["model"])
-    _restore_requires_grad(model, snap["requires_grad"])
+def _restore_training_state(student, optimizer, scheduler, snap, device):
+    student.load_state_dict(snap["student"])
+    _restore_requires_grad(student, snap["requires_grad"])
     optimizer.load_state_dict(snap["optimizer"])
     scheduler.load_state_dict(snap["scheduler"])
     random.setstate(snap["py_random"])
@@ -221,7 +220,7 @@ class KDFinBert():
 
         # soften probabilities and compute distillation loss
         loss_function = KLDivLoss(reduction="batchmean")
-        T = float(self.config.temperature)
+        T = float(self.temperature)
         loss_logits = (
             loss_function(
                 F.log_softmax(outputs_student.logits / T, dim=-1),
@@ -230,10 +229,62 @@ class KDFinBert():
             * (T ** 2)
         )
 
-        alpha = float(self.config.alpha)
+        alpha = float(self.alpha)
         loss = alpha * student_loss + (1.0 - alpha) * loss_logits
 
         return (loss, outputs_student) if return_outputs else loss
+    
+    def get_loader(self, examples, phase):
+        """
+        Creates a data loader object for a dataset.
+        Parameters
+        ----------
+        examples: list
+            The list of InputExample's.
+        phase: 'train' or 'eval'
+            Determines whether to use random sampling or sequential sampling depending on the phase.
+        Returns
+        -------
+        dataloader: DataLoader
+            The data loader object.
+        """
+
+        features = convert_examples_to_features(examples, self.label_list,
+                                                self.config.max_seq_length,
+                                                self.tokenizer,
+                                                self.config.output_mode)
+
+        # Log the necessasry information
+        logger.info("***** Loading data *****")
+        logger.info("  Num examples = %d", len(examples))
+        logger.info("  Batch size = %d", self.config.train_batch_size)
+        logger.info("  Num steps = %d", self.num_train_optimization_steps)
+
+        # Load the data, make it into TensorDataset
+        all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
+        all_attention_mask = torch.tensor([f.attention_mask for f in features], dtype=torch.long)
+        all_token_type_ids = torch.tensor([f.token_type_ids for f in features], dtype=torch.long)
+
+        if self.config.output_mode == "classification":
+            all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.long)
+        elif self.config.output_mode == "regression":
+            all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.float)
+
+        try:
+            all_agree_ids = torch.tensor([f.agree for f in features], dtype=torch.long)
+        except:
+            all_agree_ids = torch.tensor([0.0 for f in features], dtype=torch.long)
+
+        data = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_label_ids, all_agree_ids)
+
+        # Distributed, if necessary
+        if phase == 'train':
+            my_sampler = RandomSampler(data)
+        elif phase == 'eval':
+            my_sampler = SequentialSampler(data)
+
+        dataloader = DataLoader(data, sampler=my_sampler, batch_size=self.config.train_batch_size)
+        return dataloader
 
     
     def train(self, train_examples, teacher, student):
@@ -454,6 +505,88 @@ class KDFinBert():
 
         os.remove(os.path.join(self.config.model_dir, f"temporary{best_model}"))
         return student
+
+    def evaluate(self, model, examples):
+        """
+        Evaluate the model.
+        Parameters
+        ----------
+        model: BertModel
+            The model to be evaluated.
+        examples: list
+            Evaluation data as a list of InputExample's/
+        Returns
+        -------
+        evaluation_df: pd.DataFrame
+            A dataframe that includes for each example predicted probability and labels.
+        """
+
+        eval_loader = self.get_loader(examples, phase='eval')
+
+        logger.info("***** Running evaluation ***** ")
+        logger.info("  Num examples = %d", len(examples))
+        logger.info("  Batch size = %d", self.config.eval_batch_size)
+
+        model.eval()
+        eval_loss, eval_accuracy = 0, 0
+        nb_eval_steps, nb_eval_examples = 0, 0
+
+        predictions = []
+        labels = []
+        agree_levels = []
+        text_ids = []
+
+        for input_ids, attention_mask, token_type_ids, label_ids, agree_ids in tqdm(eval_loader, desc="Testing"):
+            input_ids = input_ids.to(self.device)
+            attention_mask = attention_mask.to(self.device)
+            token_type_ids = token_type_ids.to(self.device)
+            label_ids = label_ids.to(self.device)
+            agree_ids = agree_ids.to(self.device)
+
+            with torch.no_grad():
+                logits = model(input_ids, attention_mask, token_type_ids)[0]
+
+                if self.config.output_mode == "classification":
+                    loss_fct = CrossEntropyLoss()
+                    tmp_eval_loss = loss_fct(logits.view(-1, self.num_labels), label_ids.view(-1))
+                elif self.config.output_mode == "regression":
+                    loss_fct = MSELoss()
+                    tmp_eval_loss = loss_fct(logits.view(-1), label_ids.view(-1))
+
+                np_logits = logits.cpu().numpy()
+
+                if self.config.output_mode == 'classification':
+                    prediction = np.array(np_logits)
+                elif self.config.output_mode == "regression":
+                    prediction = np.array(np_logits)
+
+                for agree_id in agree_ids:
+                    agree_levels.append(agree_id.item())
+
+                for label_id in label_ids:
+                    labels.append(label_id.item())
+
+                for pred in prediction:
+                    predictions.append(pred)
+
+                text_ids.append(input_ids)
+
+                # tmp_eval_loss = loss_fct(logits.view(-1, self.num_labels), label_ids.view(-1))
+                # tmp_eval_loss = model(input_ids, token_type_ids, attention_mask, label_ids)
+
+                eval_loss += tmp_eval_loss.mean().item()
+                nb_eval_steps += 1
+
+            # logits = logits.detach().cpu().numpy()
+            # label_ids = label_ids.to('cpu').numpy()
+            # tmp_eval_accuracy = accuracy(logits, label_ids)
+
+            # eval_loss += tmp_eval_loss.mean().item()
+            # eval_accuracy += tmp_eval_accuracy
+
+        evaluation_df = pd.DataFrame({'predictions': predictions, 'labels': labels, "agree_levels": agree_levels})
+
+        return evaluation_df
 
 
 

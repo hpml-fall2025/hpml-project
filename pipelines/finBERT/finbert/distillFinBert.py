@@ -108,10 +108,7 @@ class DistillFinBert(object):
         return [] if module is None else list(module.named_parameters())
 
     def _forward_logits(self, model, input_ids, attention_mask, token_type_ids):
-        if self._is_distilbert(model):
-            out = model(input_ids=input_ids, attention_mask=attention_mask)
-        else:
-            out = model(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)
+        out = model(input_ids=input_ids, attention_mask=attention_mask)
         return out.logits if hasattr(out, "logits") else out[0]
 
     def prepare_model(self, label_list):
@@ -404,13 +401,9 @@ class DistillFinBert(object):
                 for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
                     # --- gradual unfreeze (same logic, but correct backbone) ---
                     if self.config.gradual_unfreeze and i == 0:
-                        if self._is_distilbert(model):
-                            for param in model.distilbert.parameters():
-                                param.requires_grad = False
-                        else:
-                            for param in model.bert.parameters():
-                                param.requires_grad = False
-
+                        for param in model.distilbert.parameters():
+                            param.requires_grad = False
+                       
                     if (step_number // 3) > 0 and (step % (step_number // 3)) == 0:
                         i += 1
 
@@ -511,13 +504,9 @@ class DistillFinBert(object):
 
             for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
                 if self.config.gradual_unfreeze and i == 0:
-                    if self._is_distilbert(model):
-                        for param in model.distilbert.parameters():
-                            param.requires_grad = False
-                    else:
-                        for param in model.bert.parameters():
-                            param.requires_grad = False
-
+                    for param in model.distilbert.parameters():
+                        param.requires_grad = False
+                        
                 if (step_number // 3) > 0 and (step % (step_number // 3)) == 0:
                     i += 1
 

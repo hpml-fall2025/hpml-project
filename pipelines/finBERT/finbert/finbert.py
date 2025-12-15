@@ -19,7 +19,6 @@ from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
-tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
 
 class Config(object):
     """The configuration class for training."""
@@ -238,17 +237,18 @@ class FinBert(object):
             # apply the discriminative fine-tuning. discrimination rate is governed by dft_rate.
 
             encoder_params = []
-            for i in range(12):
+            num_layers = model.config.num_hidden_layers
+            for i in range(num_layers):
                 encoder_decay = {
                     'params': [p for n, p in list(model.bert.encoder.layer[i].named_parameters()) if
                                not any(nd in n for nd in no_decay)],
                     'weight_decay': 0.01,
-                    'lr': lr / (dft_rate ** (12 - i))}
+                    'lr': lr / (dft_rate ** (num_layers - i))}
                 encoder_nodecay = {
                     'params': [p for n, p in list(model.bert.encoder.layer[i].named_parameters()) if
                                any(nd in n for nd in no_decay)],
                     'weight_decay': 0.0,
-                    'lr': lr / (dft_rate ** (12 - i))}
+                    'lr': lr / (dft_rate ** (num_layers - i))}
                 encoder_params.append(encoder_decay)
                 encoder_params.append(encoder_nodecay)
 
@@ -256,11 +256,11 @@ class FinBert(object):
                 {'params': [p for n, p in list(model.bert.embeddings.named_parameters()) if
                             not any(nd in n for nd in no_decay)],
                  'weight_decay': 0.01,
-                 'lr': lr / (dft_rate ** 13)},
+                 'lr': lr / (dft_rate ** (num_layers+1))},
                 {'params': [p for n, p in list(model.bert.embeddings.named_parameters()) if
                             any(nd in n for nd in no_decay)],
                  'weight_decay': 0.0,
-                 'lr': lr / (dft_rate ** 13)},
+                 'lr': lr / (dft_rate ** (num_layers+1))},
                 {'params': [p for n, p in list(model.bert.pooler.named_parameters()) if
                             not any(nd in n for nd in no_decay)],
                  'weight_decay': 0.01,

@@ -8,12 +8,14 @@ sys.path.append(os.path.dirname(current_dir))
 
 import numpy as np
 import pandas as pd
-from finbert.finbert import predict
+from finBERT.finbert.finbert import predict
 from transformers import AutoModelForSequenceClassification
 from pipelines.base import Pipeline
+import datetime 
+import csv
 
 class NewsPipeline(Pipeline):
-    def __init__(self):
+    def __init__(self, use_gpu = True):
         # FinBERT paths
         current_file = os.path.abspath(__file__)
         pipeline_dir = os.path.dirname(current_file)
@@ -27,58 +29,38 @@ class NewsPipeline(Pipeline):
 
         self.model = AutoModelForSequenceClassification.from_pretrained(model_path, num_labels=3, cache_dir=None)
         
-        use_gpu = True
-        
         # Load Data
-        data_path = os.path.join(finbert_root, 'data', 'sentiment_data', 'test.csv')
+        data_path = "data/headlines.csv"
         # Reading tab-separated file
-        df = pd.read_csv(data_path, sep='\t')
+        self.df = pd.read_csv(data_path)
+        
+        self.use_gpu = use_gpu
+
+        self.df = self.df.drop('URL', axis=1)
+        self.df['Timestamp'] = pd.to_datetime(
+            self.df['Timestamp'],
+            format='%Y-%m-%dT%H:%M:%SZ',
+            errors='raise'
+        )
+        self.df['Timestamp'] = self.df['Timestamp'].apply(lambda x : x.date())
             
-        if 'text' not in df.columns:
-            # Handle case where first column is index but unnamed in header (common in some csv exports)
-            # The user provided file has "\ttext\tlabel" which pandas usually parses with an empty first col name
-            pass
-            
-        # Combine text for batch prediction
+    def get_latest_data(self, dates) -> dict:
+        #dates -> date time objects
+                # Combine text for batch prediction
         # We join with a period to ensure sent_tokenize splits them correctly
-        texts = df['text'].astype(str).tolist()
-        full_text = ". ".join(texts)
-        
-        # Run prediction
-        print("Running FinBERT prediction on test data...")
-        self.results_df = predict(full_text, self.model, use_gpu=True)
+        mask = self.df["Timestamp"].isin(dates)
+        rows = self.df.loc[mask]
+        headlines = rows["Headline"].tolist()
+        full_text = ". ".join(headlines)
+
+        self.results_df = predict(full_text, self.model, use_gpu=self.use_gpu)
         self.sentiment_scores = self.results_df['sentiment_score'].values
-        self.current_idx = 0
         
-        print(f"NewsPipeline initialized. Loaded {len(self.sentiment_scores)} sentiment scores.")
+        vol =  sum(self.sentiment_scores**2)  / len(self.sentiment_scores) if len(self.sentiment_scores) > 0 else 0.0
 
-    def get_latest_data(self) -> dict:
-        noise = self.rng.normal(0.0, self.sigma)
-        new_log_val = self.mu + self.phi * (self.last_log_val - self.mu) + noise
-        self.last_log_val = new_log_val
-        return {"news_rv": float(np.exp(new_log_val))}
+        return vol
 
-    def get_headline(self):
-        headlines = [
-            "SPY rallies on strong tech earnings",
-            "Fed signals potential rate hike, markets jittery",
-            "Inflation data comes in lower than expected",
-            "Energy sector drags SPY lower",
-            "Global supply chain issues persist, affecting outlook",
-            "Consumer confidence hits 5-year high",
-            "Tech sell-off continues as yields rise",
-            "SPY steady ahead of jobs report",
-            "Geopolitical tensions rise, impacting volatility",
-            "Analysts upgrade S&P 500 price target"
-        ]
-        return self.rng.choice(headlines)
-        if len(self.sentiment_scores) == 0:
-            return {"news_rv": 0.0}
-            
-        score = self.sentiment_scores[self.current_idx]
-        
-        news_rv = score ** 2
-        
-        self.current_idx = (self.current_idx + 1) % len(self.sentiment_scores)
-        
-        return {"news_rv": float(news_rv)}
+#Example usage:
+# news_pipe = NewsPipeline()
+# dates = [datetime.datetime.strptime(date_string, "%Y-%m-%d").date() for date_string in ['2021-01-04', '2021-01-06', '2021-02-07']]
+# news_pipe.get_latest_data(dates)

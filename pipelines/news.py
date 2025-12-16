@@ -44,20 +44,27 @@ class NewsPipeline(Pipeline):
         )
         self.df['Timestamp'] = self.df['Timestamp'].apply(lambda x : x.date())
             
-    def get_latest_data(self, dates) -> dict:
-        #dates -> date time objects
-                # Combine text for batch prediction
-        # We join with a period to ensure sent_tokenize splits them correctly
-        mask = self.df["Timestamp"].isin(dates)
-        rows = self.df.loc[mask]
-        headlines = rows["Headline"].tolist()
-        full_text = ". ".join(headlines)
-
-        self.results_df = predict(full_text, self.model, use_gpu=self.use_gpu)
-        self.sentiment_scores = self.results_df['sentiment_score'].values
+    def get_latest_data(self, query_date) -> dict:
+        day_weights = [0.5, 0.25, 0.13, 0.07, 0.03]  
         
-        vol =  sum(self.sentiment_scores**2)  / len(self.sentiment_scores) if len(self.sentiment_scores) > 0 else 0.0
-
+        vol = 0
+        
+        for i in range(len(day_weights)):
+            check_date = query_date - datetime.timedelta(days=i)
+            mask = self.df["Timestamp"] == check_date
+            day_rows = self.df.loc[mask]
+            
+            if len(day_rows)==0:
+                continue
+            
+            day_headlines = day_rows["Headline"].tolist()
+            model_batch = " .".join(day_headlines) #we do this because the model splits by "." to figure out the seperate headlines
+            
+            results_df = predict(model_batch, self.model, use_gpu=self.use_gpu)
+            day_sentiment_scores = results_df['sentiment_score'].values
+            day_avg_ss = sum(day_sentiment_scores) / len(day_sentiment_scores)
+            vol += day_weights[i] * day_avg_ss
+            
         return vol
 
 #Example usage:

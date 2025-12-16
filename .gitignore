@@ -45,7 +45,8 @@ workspace.xml
 
 # Models and data
 models/
-data/
+data/*
+!data/headlines.csv
 FinancialPhraseBank-v1.0/
 
 #mihir's csv

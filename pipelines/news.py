@@ -8,12 +8,14 @@ sys.path.append(os.path.dirname(current_dir))
 
 import numpy as np
 import pandas as pd
-from finbert.finbert import predict
+from finBERT.finbert.finbert import predict
 from transformers import AutoModelForSequenceClassification
 from pipelines.base import Pipeline
+import datetime 
+import csv
 
 class NewsPipeline(Pipeline):
-    def __init__(self):
+    def __init__(self, use_gpu = True):
         # FinBERT paths
         current_file = os.path.abspath(__file__)
         pipeline_dir = os.path.dirname(current_file)
@@ -27,58 +29,45 @@ class NewsPipeline(Pipeline):
 
         self.model = AutoModelForSequenceClassification.from_pretrained(model_path, num_labels=3, cache_dir=None)
         
-        use_gpu = True
-        
         # Load Data
-        data_path = os.path.join(finbert_root, 'data', 'sentiment_data', 'test.csv')
+        data_path = "data/headlines.csv"
         # Reading tab-separated file
-        df = pd.read_csv(data_path, sep='\t')
-            
-        if 'text' not in df.columns:
-            # Handle case where first column is index but unnamed in header (common in some csv exports)
-            # The user provided file has "\ttext\tlabel" which pandas usually parses with an empty first col name
-            pass
-            
-        # Combine text for batch prediction
-        # We join with a period to ensure sent_tokenize splits them correctly
-        texts = df['text'].astype(str).tolist()
-        full_text = ". ".join(texts)
+        self.df = pd.read_csv(data_path)
         
-        # Run prediction
-        print("Running FinBERT prediction on test data...")
-        self.results_df = predict(full_text, self.model, use_gpu=True)
-        self.sentiment_scores = self.results_df['sentiment_score'].values
-        self.current_idx = 0
-        
-        print(f"NewsPipeline initialized. Loaded {len(self.sentiment_scores)} sentiment scores.")
+        self.use_gpu = use_gpu
 
-    def get_latest_data(self) -> dict:
-        noise = self.rng.normal(0.0, self.sigma)
-        new_log_val = self.mu + self.phi * (self.last_log_val - self.mu) + noise
-        self.last_log_val = new_log_val
-        return {"news_rv": float(np.exp(new_log_val))}
-
-    def get_headline(self):
-        headlines = [
-            "SPY rallies on strong tech earnings",
-            "Fed signals potential rate hike, markets jittery",
-            "Inflation data comes in lower than expected",
-            "Energy sector drags SPY lower",
-            "Global supply chain issues persist, affecting outlook",
-            "Consumer confidence hits 5-year high",
-            "Tech sell-off continues as yields rise",
-            "SPY steady ahead of jobs report",
-            "Geopolitical tensions rise, impacting volatility",
-            "Analysts upgrade S&P 500 price target"
-        ]
-        return self.rng.choice(headlines)
-        if len(self.sentiment_scores) == 0:
-            return {"news_rv": 0.0}
+        self.df = self.df.drop('URL', axis=1)
+        self.df['Timestamp'] = pd.to_datetime(
+            self.df['Timestamp'],
+            format='%Y-%m-%dT%H:%M:%SZ',
+            errors='raise'
+        )
+        self.df['Timestamp'] = self.df['Timestamp'].apply(lambda x : x.date())
             
-        score = self.sentiment_scores[self.current_idx]
+    def get_latest_data(self, query_date) -> dict:
+        day_weights = [0.5, 0.25, 0.13, 0.07, 0.03]  
         
-        news_rv = score ** 2
+        vol = 0
         
-        self.current_idx = (self.current_idx + 1) % len(self.sentiment_scores)
-        
-        return {"news_rv": float(news_rv)}
+        for i in range(len(day_weights)):
+            check_date = query_date - datetime.timedelta(days=i)
+            mask = self.df["Timestamp"] == check_date
+            day_rows = self.df.loc[mask]
+            
+            if len(day_rows)==0:
+                continue
+            
+            day_headlines = day_rows["Headline"].tolist()
+            model_batch = " .".join(day_headlines) #we do this because the model splits by "." to figure out the seperate headlines
+            
+            results_df = predict(model_batch, self.model, use_gpu=self.use_gpu)
+            day_sentiment_scores = results_df['sentiment_score'].values
+            day_avg_ss = sum(day_sentiment_scores) / len(day_sentiment_scores)
+            vol += day_weights[i] * day_avg_ss
+            
+        return vol
+
+#Example usage:
+# news_pipe = NewsPipeline()
+# dates = [datetime.datetime.strptime(date_string, "%Y-%m-%d").date() for date_string in ['2021-01-04', '2021-01-06', '2021-02-07']]
+# news_pipe.get_latest_data(dates)

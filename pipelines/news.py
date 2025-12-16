@@ -13,6 +13,7 @@ from transformers import AutoModelForSequenceClassification
 from pipelines.base import Pipeline
 import datetime 
 import csv
+from typing import Tuple
 
 class NewsPipeline(Pipeline):
     def __init__(self, use_gpu = True):
@@ -44,7 +45,7 @@ class NewsPipeline(Pipeline):
         )
         self.df['Timestamp'] = self.df['Timestamp'].apply(lambda x : x.date())
     
-    def predict_news_vol(self, date) -> (float, float):
+    def predict_news_vol(self, date) -> Tuple[float, int]:
         """
         predicts volatility wrt news headlines with custom drop-off weighting
         """
@@ -52,9 +53,10 @@ class NewsPipeline(Pipeline):
         
         vol = 0
         num_headlines = 0
+        delay = 1
         
         for i in range(len(day_weights)):
-            check_date = date - datetime.timedelta(days=i)
+            check_date = date - datetime.timedelta(days=i+delay)
             mask = self.df["Timestamp"] == check_date
             day_rows = self.df.loc[mask]
             

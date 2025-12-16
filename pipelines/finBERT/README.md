@@ -2,7 +2,6 @@
 Follow these steps to get inference up and running.
 
 ## Installing
-They used conda but it broke for me so I used venv
 ```bash
 python3 -m venv venv
 source venv/bin/activate
@@ -10,10 +9,9 @@ pip install -r requirements.txt
 ```
 
 ## Models
-Download the model from her:
+Download the Baseline Model from Here:
 * [Sentiment analysis model trained on Financial PhraseBank](https://prosus-public.s3-eu-west-1.amazonaws.com/finbert/finbert-sentiment/pytorch_model.bin)
 
-The workflow should be like this:
 * Create a directory for the model. For example: `models/sentiment/pytorch_model.bin`
 * Download the model and put it into the directory you just created.
 * Put a copy of `config.json` in this same directory. 
@@ -83,20 +81,15 @@ config = Config(   data_dir=cl_data_path,
 The last two parameters `discriminate` and `gradual_unfreeze` determine whether to apply the corresponding technique 
 against catastrophic forgetting.
 
-## Getting predictions
-We provide a script to quickly get sentiment predictions using FinBERT. Given a .txt file, `predict.py` produces a .csv file including the sentences in the text, corresponding softmax probabilities for three labels, actual prediction and sentiment score (which is calculated with: probability of positive - probability of negative).
-
-Here's an example with the provided example text: `test.txt`. From the command line, simply run:
-```bash
-python predict.py --text_path test.txt --output_dir output/ --model_path models/classifier_model/finbert-sentiment
-```
-
 # Profiling
-To profile the model, run the `finbert_profiling.ipynb` notebook. This is a modified version of the original notebook that adds profiling to the model.
+To profile the model, run the `baseline_profiling.ipynb` notebook. This is a modified version of the original notebook that adds profiling to the model.
 
-## Model Variants
+## Quantized Model Variants
 I've set it up so that we can load different model variants (i.e. with different optimizations) and profile them. The current variants are:
 * Baseline
 * Quantized Int8
 
 Instructions on how to select between variants to train/run and how to add a new variant are in the notebook.
+
+## Distilled Models
+We retrained FinBERT with Hugging Face DistilledBert Base, prajjwal1/bert-medium, and prajjwal1/bert-mini. For the latter two models we also used Knowledge Distillation, using the baseline FinBERT model as the teacher. The notebooks for training these variants are subsequently named "distilled_finbert.ipynb", "medium_finbert.ipynb", and "mini_finbert.ipynb". 

@@ -5,7 +5,8 @@ import statsmodels.api as sm
 import datetime as dt
 import yfinance as yf
 import os
-from .base import Pipeline
+from typing import Tuple
+from pipelines.base import Pipeline
 
 class VolatilityPipeline(Pipeline):
     def __init__(self):
@@ -64,6 +65,12 @@ class VolatilityPipeline(Pipeline):
             # 5. Train Model
             self.model = sm.OLS(y, X).fit()
             print("VolatilityPipeline: Model trained successfully.")
+            print(f"nobs={int(self.model.nobs)}  df_model={int(self.model.df_model)}  df_resid={int(self.model.df_resid)}")
+            print(f"R2={self.model.rsquared:.4f}  AdjR2={self.model.rsquared_adj:.4f}")
+            print(f"MSE(resid)={self.model.mse_resid:.6f}  RMSE={np.sqrt(self.model.mse_resid):.6f}")
+            print(f"MAE(resid)={np.mean(np.abs(self.model.resid)):.6f}")
+            print(f"AIC={self.model.aic:.2f}  BIC={self.model.bic:.2f}")
+            print()
         except Exception as e:
             print(f"Error training model: {e}")
 
@@ -195,14 +202,56 @@ class VolatilityPipeline(Pipeline):
         rv.dropna(inplace=True)
         
         return rv
-    
-    def predict_har_vol(date) -> float:
+
+
+     
+
+
+
+    def predict_har_vol(self, date) -> Tuple[float, float]:
         """"
         input: date to predict volatility on
         output: realized volatility prediction based on trained model
         """
 
-        return 1
+        if self.model is None:
+            raise ValueError("Model not initialized")
+
+        if isinstance(date, str):
+            target_date = pd.to_datetime(date).date()
+        elif isinstance(date, dt.datetime):
+            target_date = date.date()
+        else:
+            target_date = date
+        
+        prev_date = target_date - dt.timedelta(days=1)
+        prev_end = dt.datetime.combine(prev_date, dt.time(23, 59, 59, 999999))
+        lookback_start = prev_end - dt.timedelta(days=59)
+
+        curr_data = self.full_hist_data.loc[lookback_start:prev_end]
+        if curr_data.empty:
+            raise ValueError("No intraday data found for requested date window")
+        
+        curr_rv = self.__rv_calculation(curr_data)
+        if curr_rv.empty:
+            raise ValueError("Not enough data to compute RV features (need rolling windows)")
+        if prev_date not in curr_rv.index:
+            raise ValueError("No RV features found for previous date")
+
+
+        curr_rv_scaled = (curr_rv - self.train_min) / (self.train_max - self.train_min)
+
+        last_row = curr_rv_scaled.loc[[prev_date], ["RV_daily", "RV_weekly", "RV_monthly"]]
+        last_row["const"] = 1.0
+        last_row = last_row[self.model.params.index]
+
+        prediction_for_target_date = float(self.model.predict(last_row).iloc[0])
+
+        true_prev_rv = float(curr_rv.loc[prev_date, "RV_daily"])
+
+        return prediction_for_target_date, true_prev_rv
+
+
 
     def get_latest_data(self) -> dict:
         """

@@ -43,6 +43,35 @@ class NewsPipeline(Pipeline):
             errors='raise'
         )
         self.df['Timestamp'] = self.df['Timestamp'].apply(lambda x : x.date())
+    
+    def predict_news_vol(self, date) -> (float, float):
+        """
+        predicts volatility wrt news headlines with custom drop-off weighting
+        """
+        day_weights = [0.5, 0.25, 0.13, 0.07, 0.03]  
+        
+        vol = 0
+        num_headlines = 0
+        
+        for i in range(len(day_weights)):
+            check_date = date - datetime.timedelta(days=i)
+            mask = self.df["Timestamp"] == check_date
+            day_rows = self.df.loc[mask]
+            
+            if len(day_rows)==0:
+                continue
+            
+            day_headlines = day_rows["Headline"].tolist()
+            model_batch = " .".join(day_headlines) #we do this because the model splits by "." to figure out the seperate headlines
+            
+            results_df = predict(model_batch, self.model, use_gpu=self.use_gpu)
+            day_sentiment_scores = results_df['sentiment_score'].values
+            day_avg_ss = sum(day_sentiment_scores ** 2) / len(day_sentiment_scores) #average squared sentiment score for a fixed day
+            num_headlines += len(day_sentiment_scores)
+            vol += day_weights[i] * day_avg_ss
+        
+        return vol, num_headlines
+
             
     def get_latest_data(self, query_date) -> dict:
         day_weights = [0.5, 0.25, 0.13, 0.07, 0.03]  

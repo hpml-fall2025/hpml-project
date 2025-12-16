@@ -168,7 +168,7 @@ class ProfiledFinBert(FinBert):
         if profile_steps < 1:
             profile_steps = 20
 
-        scaler = torch.cuda.amp.GradScaler(enabled=self.config.use_amp)
+        scaler = torch.amp.GradScaler('cuda', enabled=self.config.use_amp)
         
         
         snap = _snapshot_training_state(
@@ -221,12 +221,12 @@ class ProfiledFinBert(FinBert):
                     
                     # Forward pass profiling
                     with record_function("forward_pass"):
-                        with torch.cuda.amp.autocast(enabled=self.config.use_amp):
+                        with torch.amp.autocast('cuda', enabled=self.config.use_amp):
                             logits = model(input_ids, attention_mask, token_type_ids)[0]
                     
                     # Loss calculation profiling
                     with record_function("loss_calculation"):
-                        with torch.cuda.amp.autocast(enabled=self.config.use_amp):
+                        with torch.amp.autocast('cuda', enabled=self.config.use_amp):
                             weights = self.class_weights.to(self.device)
                             if self.config.output_mode == "classification":
                                 loss_fct = CrossEntropyLoss(weight=weights)
@@ -252,12 +252,6 @@ class ProfiledFinBert(FinBert):
                     # Optimizer step profiling
                     if (step + 1) % self.config.gradient_accumulation_steps == 0:
                         with record_function("optimizer_step"):
-                            if self.config.fp16:
-                                lr_this_step = self.config.learning_rate * warmup_linear(
-                                    global_step / self.num_train_optimization_steps, self.config.warm_up_proportion)
-                                for param_group in self.optimizer.param_groups:
-                                    param_group['lr'] = lr_this_step
-                            
                             if self.config.use_amp:
                                 scaler.unscale_(self.optimizer)
                                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -349,7 +343,7 @@ class ProfiledFinBert(FinBert):
                 batch = tuple(t.to(self.device) for t in batch)
                 input_ids, attention_mask, token_type_ids, label_ids, agree_ids = batch
                 
-                with torch.cuda.amp.autocast(enabled=self.config.use_amp):
+                with torch.amp.autocast('cuda', enabled=self.config.use_amp):
                     logits = model(input_ids, attention_mask, token_type_ids)[0]
                     weights = self.class_weights.to(self.device)
                     
@@ -373,12 +367,6 @@ class ProfiledFinBert(FinBert):
                 nb_tr_steps += 1
                 
                 if (step + 1) % self.config.gradient_accumulation_steps == 0:
-                    if self.config.fp16:
-                        lr_this_step = self.config.learning_rate * warmup_linear(
-                            global_step / self.num_train_optimization_steps, self.config.warm_up_proportion)
-                        for param_group in self.optimizer.param_groups:
-                            param_group['lr'] = lr_this_step
-                    
                     if self.config.use_amp:
                         scaler.unscale_(self.optimizer)
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -566,7 +554,7 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
                 
                 with record_function("inference_forward"):
                     start_time = time.time()
-                    with torch.cuda.amp.autocast(enabled=use_amp):
+                    with torch.amp.autocast('cuda', enabled=use_amp):
                         logits = model(input_ids=all_input_ids, attention_mask=all_attention_mask, token_type_ids=all_token_type_ids)[0]
                     total_inference_time += time.time() - start_time
                 

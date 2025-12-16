@@ -62,7 +62,7 @@ class NewsPipeline(Pipeline):
             
             results_df = predict(model_batch, self.model, use_gpu=self.use_gpu)
             day_sentiment_scores = results_df['sentiment_score'].values
-            day_avg_ss = sum(day_sentiment_scores) / len(day_sentiment_scores)
+            day_avg_ss = sum(day_sentiment_scores ** 2) / len(day_sentiment_scores) #average squared sentiment score for a fixed day
             vol += day_weights[i] * day_avg_ss
             
         return vol

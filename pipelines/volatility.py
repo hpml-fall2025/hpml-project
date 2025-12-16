@@ -195,6 +195,14 @@ class VolatilityPipeline(Pipeline):
         rv.dropna(inplace=True)
         
         return rv
+    
+    def predict_har_vol(date) -> float:
+        """"
+        input: date to predict volatility on
+        output: realized volatility prediction based on trained model
+        """
+
+        return 1
 
     def get_latest_data(self) -> dict:
         """

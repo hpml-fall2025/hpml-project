@@ -15,14 +15,13 @@ from transformers import AutoModelForSequenceClassification
 from pipelines.base import Pipeline
 
 
-class NewsPipeline(Pipeline):
+class NewsPipelineSlow(Pipeline):
     def __init__(
         self,
         use_gpu: bool = True,
         short_window_hours: int = 6,
         medium_window_hours: int = 30,
         long_window_hours: int = 120,
-        stream_lookback_hours: int | None = None,
     ):
         current_file = os.path.abspath(__file__)
         pipeline_dir = os.path.dirname(current_file)
@@ -58,36 +57,9 @@ class NewsPipeline(Pipeline):
             self.df["Timestamp"].dt.tz_convert("America/New_York").dt.tz_localize(None)
         )
 
-        self.df["Timestamp_hour"] = pd.to_datetime(self.df["Timestamp"].dt.floor("h")).dt.floor("h")
+        self.df["Timestamp_hour"] = self.df["Timestamp"].dt.floor("h")
+        self.df["Timestamp_hour"] = pd.to_datetime(self.df["Timestamp_hour"]).dt.floor("h")
         self._hour_cache = {}
-
-        tmin = pd.Timestamp(self.df["Timestamp_hour"].min()).floor("h")
-        tmax = pd.Timestamp(self.df["Timestamp_hour"].max()).floor("h")
-        self._hour_index = pd.date_range(tmin, tmax, freq="h")
-
-        self._max_window = int(max(self.short_window_hours, self.medium_window_hours, self.long_window_hours))
-        self._lookback_len = int(self.long_window_hours) + 8 + 1
-        if stream_lookback_hours is None:
-            stream_lookback_hours = int(self.long_window_hours) + 8
-        self.stream_lookback_hours = int(stream_lookback_hours)
-
-        self.reset_stream()
-
-    def reset_stream(self):
-        self._stream_initialized = False
-        self._stream_pos = -1
-
-        self._q_short = []
-        self._q_med = []
-        self._q_long = []
-        self._sum_short = 0.0
-        self._sum_med = 0.0
-        self._sum_long = 0.0
-
-        self._q_cnt = []
-        self._sum_cnt = 0
-
-        self._by_hour = {}
 
     def _to_hour(self, when: Union[str, dt.datetime, pd.Timestamp]) -> pd.Timestamp:
         ts = pd.Timestamp(when)
@@ -122,73 +94,24 @@ class NewsPipeline(Pipeline):
         self._hour_cache[h] = (avg_ss, cnt)
         return avg_ss, cnt
 
-    def _push_roll(self, q, which: str, x: float, win: int):
-        q.append(float(x))
-        if which == "short":
-            self._sum_short += float(x)
-            if len(q) > win:
-                self._sum_short -= float(q.pop(0))
-        elif which == "med":
-            self._sum_med += float(x)
-            if len(q) > win:
-                self._sum_med -= float(q.pop(0))
-        else:
-            self._sum_long += float(x)
-            if len(q) > win:
-                self._sum_long -= float(q.pop(0))
+    def _build_hourly_series(
+        self,
+        start_hour: Union[dt.datetime, pd.Timestamp],
+        end_hour: Union[dt.datetime, pd.Timestamp],
+    ) -> pd.DataFrame:
+        start_h = pd.Timestamp(start_hour).floor("h")
+        end_h = pd.Timestamp(end_hour).floor("h")
 
-    def _mean_roll(self, which: str, q, win: int) -> float:
-        if len(q) < win:
-            return float("nan")
-        if which == "short":
-            return float(self._sum_short / win)
-        if which == "med":
-            return float(self._sum_med / win)
-        return float(self._sum_long / win)
+        hours = pd.date_range(start_h, end_h, freq="h")
+        vals = np.zeros(len(hours), dtype=float)
+        cnts = np.zeros(len(hours), dtype=int)
 
-    def _push_cnt(self, c: int):
-        self._q_cnt.append(int(c))
-        self._sum_cnt += int(c)
-        if len(self._q_cnt) > self._lookback_len:
-            self._sum_cnt -= int(self._q_cnt.pop(0))
+        for i, h in enumerate(hours):
+            avg_ss, c = self._get_hour_stats(h)
+            vals[i] = avg_ss
+            cnts[i] = c
 
-    def _process_hour(self, h: pd.Timestamp):
-        v, c = self._get_hour_stats(h)
-
-        self._push_roll(self._q_short, "short", v, self.short_window_hours)
-        self._push_roll(self._q_med, "med", v, self.medium_window_hours)
-        self._push_roll(self._q_long, "long", v, self.long_window_hours)
-        self._push_cnt(c)
-
-        s = self._mean_roll("short", self._q_short, self.short_window_hours)
-        m = self._mean_roll("med", self._q_med, self.medium_window_hours)
-        l = self._mean_roll("long", self._q_long, self.long_window_hours)
-
-        hh = pd.Timestamp(h).floor("h")
-        self._by_hour[hh] = (float(v), float(s), float(m), float(l), int(self._sum_cnt))
-
-        keep = self._max_window + self._lookback_len + 64
-        if len(self._by_hour) > keep:
-            keys = sorted(self._by_hour.keys())
-            for k in keys[: max(0, len(keys) - keep)]:
-                del self._by_hour[k]
-
-    def _ensure_stream_until(self, hour_ts: pd.Timestamp):
-        h = pd.Timestamp(hour_ts).floor("h")
-
-        pos = int(self._hour_index.searchsorted(h, side="left"))
-        if pos < 0 or pos >= len(self._hour_index) or pd.Timestamp(self._hour_index[pos]) != h:
-            raise ValueError("Requested hour not present in hour index")
-
-        if not self._stream_initialized:
-            lb = h - pd.Timedelta(hours=int(self.stream_lookback_hours))
-            lb_pos = int(self._hour_index.searchsorted(lb, side="left"))
-            self._stream_pos = lb_pos - 1
-            self._stream_initialized = True
-
-        while self._stream_pos < pos:
-            self._stream_pos += 1
-            self._process_hour(pd.Timestamp(self._hour_index[self._stream_pos]))
+        return pd.DataFrame({"N_hourly": vals, "N_cnt": cnts}, index=hours)
 
     def predict_news_vol(
         self,
@@ -200,24 +123,31 @@ class NewsPipeline(Pipeline):
         target_hour = self._to_hour(when)
         prev_hour = target_hour - pd.Timedelta(hours=int(delay_hours))
 
-        self._ensure_stream_until(prev_hour)
+        end_hour = prev_hour
+        start_hour = end_hour - pd.Timedelta(hours=int(self.long_window_hours) + 8)
 
-        if prev_hour not in self._by_hour:
-            return 0.0, 0
+        series = self._build_hourly_series(start_hour, end_hour)
+        if series.empty:
+            raise ValueError("No news data found in requested hour window")
 
-        v, s, m, l, cnt_sum = self._by_hour[prev_hour]
-        if not (np.isfinite(s) and np.isfinite(m) and np.isfinite(l)):
-            return 0.0, int(cnt_sum)
+        x = series.copy()
+        x["N_short"] = x["N_hourly"].rolling(window=self.short_window_hours).mean()
+        x["N_medium"] = x["N_hourly"].rolling(window=self.medium_window_hours).mean()
+        x["N_long"] = x["N_hourly"].rolling(window=self.long_window_hours).mean()
 
-        row = np.array([float(v), float(s), float(m), float(l)], dtype=float)
+        x = x.dropna()
+        if x.empty or prev_hour not in x.index:
+            return 0.0, int(series["N_cnt"].sum())
+
+        row = x.loc[prev_hour, ["N_hourly", "N_short", "N_medium", "N_long"]].astype(float).values
+        n_used = int(series.loc[series.index <= prev_hour, "N_cnt"].sum())
 
         w = np.array(feature_weights, dtype=float)
-        ws = float(np.sum(np.abs(w)))
-        if ws > 0:
-            w = w / ws
+        s = float(np.sum(np.abs(w)))
+        if s > 0:
+            w = w / s
 
         raw_val = float(np.dot(w, row))
-        n_used = int(cnt_sum)
         conf = (n_used / (n_used + int(k))) if n_used > 0 else 0.0
         return float(conf * raw_val), int(n_used)
 

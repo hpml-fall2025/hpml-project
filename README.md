@@ -1,4 +1,7 @@
-## Installation
+# Optimizing Training and Inference Pipelines
+In this project, we build on the classic HAR-RV model for predicting volatility by combining it with NLP insights. We take FinBERT, a BERT style model finetuned on a financial document sentiment analysis task. We apply high performance machine learning optimizations (LoRA, Knowledge Distillation, and Quantization) to FinBERT and integrate it with the HAR-RV model to achieve a low latency real time volatility predictor. 
+
+## Environment Set Up
 Set up a virtual environment and install dependencies:
 ```bash
 python3 -m venv venv

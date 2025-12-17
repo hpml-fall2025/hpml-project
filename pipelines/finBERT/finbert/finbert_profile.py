@@ -10,7 +10,6 @@ from torch.optim import AdamW
 # PyTorch
 import torch
 from torch.profiler import profile, record_function, ProfilerActivity
-import torch.ao.quantization
 
 
 from tqdm import tqdm
@@ -26,12 +25,36 @@ from transformers import AutoTokenizer
 logger = logging.getLogger(__name__)
 
 tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
-from .profile_utils import get_model_size_mb, get_profiler_activities, print_profiler_results, setup_nltk_data, print_device_info
+from .profile_utils import get_profiler_activities, print_profiler_results, setup_nltk_data, print_device_info
 from finbert.finbert import FinBert
 
 import time
 
 import copy
+from contextlib import nullcontext
+
+
+def _to_cpu_detached(obj):
+    """Recursively copy nested structures, moving tensors to CPU for safe snapshots."""
+    if torch.is_tensor(obj):
+        # Detach to avoid autograd ties, clone to avoid aliasing, and move to CPU.
+        return obj.detach().cpu().clone()
+    if isinstance(obj, dict):
+        return {k: _to_cpu_detached(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_cpu_detached(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_to_cpu_detached(v) for v in obj)
+    # Numbers/strings/etc.
+    return copy.deepcopy(obj)
+
+
+def _move_optimizer_state_to_device(optimizer, device):
+    """Ensure optimizer state tensors live on the same device as model params after restore."""
+    for state in optimizer.state.values():
+        for k, v in list(state.items()):
+            if torch.is_tensor(v):
+                state[k] = v.to(device)
 
 def _snapshot_requires_grad(model):
     return {name: p.requires_grad for name, p in model.named_parameters()}
@@ -43,9 +66,10 @@ def _restore_requires_grad(model, req):
 
 def _snapshot_training_state(model, optimizer, scheduler, global_step, i, device):
     snap = {
-        "model": copy.deepcopy(model.state_dict()),
-        "optimizer": copy.deepcopy(optimizer.state_dict()),
-        "scheduler": copy.deepcopy(scheduler.state_dict()),
+        # Snapshot tensors on CPU to avoid GPU OOM and large device-to-device copies.
+        "model": _to_cpu_detached(model.state_dict()),
+        "optimizer": _to_cpu_detached(optimizer.state_dict()),
+        "scheduler": _to_cpu_detached(scheduler.state_dict()),
         "global_step": global_step,
         "i": i,
         # RNG states for determinism
@@ -62,6 +86,7 @@ def _restore_training_state(model, optimizer, scheduler, snap, device):
     model.load_state_dict(snap["model"])
     _restore_requires_grad(model, snap["requires_grad"])
     optimizer.load_state_dict(snap["optimizer"])
+    _move_optimizer_state_to_device(optimizer, device)
     scheduler.load_state_dict(snap["scheduler"])
     random.setstate(snap["py_random"])
     np.random.set_state(snap["np_random"])
@@ -113,7 +138,7 @@ def log_profiler_table(key_averages, name="profiler_results"):
         # Sort by total time (cuda if available, else cpu)
         # But wandb table allows sorting in UI.
         
-        table = wandb.Table(data=pd.DataFrame(rows))
+        table = wandb.Table(dataframe=pd.DataFrame(rows))
         wandb.log({name: table})
         # print(f"✓ Logged {name} table to wandb")
     except ImportError:
@@ -147,6 +172,7 @@ class ProfiledFinBert(FinBert):
         model.train()
         
         step_number = len(train_dataloader)
+        unfreeze_divisor = max(1, step_number // 3) if step_number else 1
         
         # Setup profiler - CUDA profiling only works with NVIDIA GPUs, not MPS
         activities = [ProfilerActivity.CPU]
@@ -162,13 +188,15 @@ class ProfiledFinBert(FinBert):
         print("="*80 + "\n")
         
         i = 0
+        best_model = None
 
         profile_steps = int(getattr(self.config, "profile_train_steps", 20) or 20)
         # If someone passes a weird value, fall back to 20.
         if profile_steps < 1:
             profile_steps = 20
 
-        scaler = torch.amp.GradScaler('cuda', enabled=self.config.use_amp)
+        amp_enabled = bool(getattr(self.config, "use_amp", False) and self.device.type == "cuda")
+        scaler = torch.amp.GradScaler('cuda', enabled=amp_enabled) if amp_enabled else None
         
         
         snap = _snapshot_training_state(
@@ -199,7 +227,7 @@ class ProfiledFinBert(FinBert):
                         for param in model.bert.parameters():
                             param.requires_grad = False
                     
-                    if (step % (step_number // 3)) == 0:
+                    if (step % unfreeze_divisor) == 0:
                         i += 1
                     
                     if (self.config.gradual_unfreeze and i > 1 and i < self.config.encoder_no):
@@ -221,12 +249,14 @@ class ProfiledFinBert(FinBert):
                     
                     # Forward pass profiling
                     with record_function("forward_pass"):
-                        with torch.amp.autocast('cuda', enabled=self.config.use_amp):
+                        amp_ctx = torch.amp.autocast('cuda', enabled=True) if amp_enabled else nullcontext()
+                        with amp_ctx:
                             logits = model(input_ids, attention_mask, token_type_ids)[0]
                     
                     # Loss calculation profiling
                     with record_function("loss_calculation"):
-                        with torch.amp.autocast('cuda', enabled=self.config.use_amp):
+                        amp_ctx = torch.amp.autocast('cuda', enabled=True) if amp_enabled else nullcontext()
+                        with amp_ctx:
                             weights = self.class_weights.to(self.device)
                             if self.config.output_mode == "classification":
                                 loss_fct = CrossEntropyLoss(weight=weights)
@@ -240,7 +270,7 @@ class ProfiledFinBert(FinBert):
                     
                     # Backward pass profiling
                     with record_function("backward_pass"):
-                        if self.config.use_amp:
+                        if amp_enabled:
                             scaler.scale(loss).backward()
                         else:
                             loss.backward()
@@ -252,7 +282,7 @@ class ProfiledFinBert(FinBert):
                     # Optimizer step profiling
                     if (step + 1) % self.config.gradient_accumulation_steps == 0:
                         with record_function("optimizer_step"):
-                            if self.config.use_amp:
+                            if amp_enabled:
                                 scaler.unscale_(self.optimizer)
                                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                                 scaler.step(self.optimizer)
@@ -325,7 +355,7 @@ class ProfiledFinBert(FinBert):
                     for param in model.bert.parameters():
                         param.requires_grad = False
                 
-                if (step % (step_number // 3)) == 0:
+                if (step % unfreeze_divisor) == 0:
                     i += 1
                 
                 if (self.config.gradual_unfreeze and i > 1 and i < self.config.encoder_no):
@@ -343,7 +373,8 @@ class ProfiledFinBert(FinBert):
                 batch = tuple(t.to(self.device) for t in batch)
                 input_ids, attention_mask, token_type_ids, label_ids, agree_ids = batch
                 
-                with torch.amp.autocast('cuda', enabled=self.config.use_amp):
+                amp_ctx = torch.amp.autocast('cuda', enabled=True) if amp_enabled else nullcontext()
+                with amp_ctx:
                     logits = model(input_ids, attention_mask, token_type_ids)[0]
                     weights = self.class_weights.to(self.device)
                     
@@ -357,7 +388,7 @@ class ProfiledFinBert(FinBert):
                     if self.config.gradient_accumulation_steps > 1:
                         loss = loss / self.config.gradient_accumulation_steps
                 
-                if self.config.use_amp:
+                if amp_enabled:
                     scaler.scale(loss).backward()
                 else:
                     loss.backward()
@@ -367,7 +398,7 @@ class ProfiledFinBert(FinBert):
                 nb_tr_steps += 1
                 
                 if (step + 1) % self.config.gradient_accumulation_steps == 0:
-                    if self.config.use_amp:
+                    if amp_enabled:
                         scaler.unscale_(self.optimizer)
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                         scaler.step(self.optimizer)
@@ -399,6 +430,7 @@ class ProfiledFinBert(FinBert):
             
             valid_loss, valid_accuracy = 0, 0
             nb_valid_steps, nb_valid_examples = 0, 0
+            weights = self.class_weights.to(self.device)
             
             for input_ids, attention_mask, token_type_ids, label_ids, agree_ids in tqdm(validation_loader, desc="Validating"):
                 input_ids = input_ids.to(self.device)
@@ -433,15 +465,21 @@ class ProfiledFinBert(FinBert):
                 pass
             
             if valid_loss == min(self.validation_losses):
-                try:
-                    os.remove(self.config.model_dir / ('temporary' + str(best_model)))
-                except:
-                    print('No best model found')
+                if best_model is not None:
+                    try:
+                        os.remove(self.config.model_dir / ('temporary' + str(best_model)))
+                    except Exception:
+                        pass
                 torch.save({'epoch': str(i), 'state_dict': model.state_dict()},
                            self.config.model_dir / ('temporary' + str(i)))
                 best_model = i
         
         # Save the trained model
+        if best_model is None:
+            # Fallback: if no improvement was recorded, save the last state as best.
+            best_model = i
+            torch.save({'epoch': str(i), 'state_dict': model.state_dict()},
+                       self.config.model_dir / ('temporary' + str(i)))
         checkpoint = torch.load(self.config.model_dir / ('temporary' + str(best_model)))
         model.load_state_dict(checkpoint['state_dict'])
         model_to_save = model.module if hasattr(model, 'module') else model
@@ -493,26 +531,10 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
     else:
         device = torch.device("cpu")
 
-    # AMP autocast is only supported on CUDA in this codepath (torch.cuda.amp.*)
-    use_amp = bool(use_amp and device.type == "cuda")
+    # AMP is only enabled for CUDA here (MPS/CPU will run in fp32)
+    amp_enabled = bool(use_amp and device.type == "cuda")
     
     print_device_info(device)
-    
-    # Check if model is already on device (e.g., BitsAndBytes quantized models)
-    is_quantized = hasattr(model, 'is_loaded_in_8bit') and model.is_loaded_in_8bit
-    is_quantized = is_quantized or (hasattr(model, 'is_loaded_in_4bit') and model.is_loaded_in_4bit)
-    
-    # Only move model if it's not already quantized and placed
-    if not is_quantized:
-        model = model.to(device)
-    else:
-        print(f"✓ Model already quantized and placed on device (skipping .to() call)")
-        # For quantized models, get the actual device from model
-        if hasattr(model, 'device'):
-            device = model.device
-        elif hasattr(model, 'hf_device_map'):
-            # BitsAndBytes models have device_map
-            device = torch.device('cuda:0')  # Usually on cuda:0
     
     
     label_list = ['positive', 'negative', 'neutral']
@@ -530,6 +552,8 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
         profile_memory=True,
         with_stack=False
     ) as prof:
+        with record_function("model_to_device"):
+            model = model.to(device)
         
         with record_function("sentence_tokenization"):
             sentences = sent_tokenize(text)
@@ -547,25 +571,25 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
                 all_token_type_ids = torch.tensor([f.token_type_ids for f in features], dtype=torch.long).to(device)
             
             with torch.no_grad():
-                # Remove the model_to_device profiling section for quantized models
-                if not is_quantized:
-                    with record_function("model_to_device"):
-                        model = model.to(device)
-                
                 with record_function("inference_forward"):
+                    if device.type == "cuda":
+                        torch.cuda.synchronize()
                     start_time = time.time()
-                    with torch.amp.autocast('cuda', enabled=use_amp):
+                    amp_ctx = torch.amp.autocast('cuda', enabled=True) if amp_enabled else nullcontext()
+                    with amp_ctx:
                         logits = model(input_ids=all_input_ids, attention_mask=all_attention_mask, token_type_ids=all_token_type_ids)[0]
+                    if device.type == "cuda":
+                        torch.cuda.synchronize()
                     total_inference_time += time.time() - start_time
                 
                 with record_function("postprocess_results"):
-                    logits = softmax(np.array(logits.cpu()))
-                    sentiment_score = pd.Series(logits[:, 0] - logits[:, 1])
-                    predictions = np.squeeze(np.argmax(logits, axis=1))
+                    logits_np = softmax(logits.detach().cpu().numpy())
+                    sentiment_score = pd.Series(logits_np[:, 0] - logits_np[:, 1])
+                    predictions = np.squeeze(np.argmax(logits_np, axis=1))
                     
                     batch_result = {
                         'sentence': batch,
-                        'logit': list(logits),
+                        'logit': list(logits_np),
                         'prediction': predictions,
                         'sentiment_score': sentiment_score
                     }
@@ -596,7 +620,6 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
         'inference_time_ms': total_inference_time * 1000,
         'time_per_sentence_ms': (total_inference_time * 1000) / len(sentences) if len(sentences) else 0.0,
         'device': str(device),
-        'is_quantized': is_quantized,
         'tokenization_time_ms': tokenization_time_ms,
         'inference_forward_time_ms': inference_forward_time_ms,
         'model_to_device_time_ms': model_to_device_time_ms,
@@ -606,7 +629,5 @@ def profile_inference(text, model, write_to_csv=False, path=None, variant_name="
     print(f"  Total sentences: {metrics['total_sentences']}")
     print(f"  Total inference time: {metrics['inference_time_ms']:.2f} ms")
     print(f"  Time per sentence: {metrics['time_per_sentence_ms']:.2f} ms")
-    if is_quantized:
-        print(f"  ✓ Quantized model profiled successfully")
     
     return result, metrics

@@ -26,3 +26,5 @@ pip install -r requirements.txt
 **data** contains a data management script and a sample csv we test with.
 
 **HAR-RV_forecast.ipynb** contains exploratory code for visualizing the stock data and experimenting with the HAR-RV models. 
+
+**WandB dashboard** https://wandb.ai/si2449-columbia-university/Project-Runs 

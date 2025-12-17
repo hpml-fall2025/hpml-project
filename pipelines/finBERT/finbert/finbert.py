@@ -1,11 +1,8 @@
 from __future__ import absolute_import, division, print_function
-
 import random
-
 import pandas as pd
 from torch.nn import MSELoss, CrossEntropyLoss
-from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
-    TensorDataset)
+from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler, TensorDataset)
 from torch.optim import AdamW
 from tqdm import tqdm
 from tqdm import trange
@@ -276,47 +273,76 @@ class FinBert(object):
 
         if self.config.discriminate:
             # apply the discriminative fine-tuning. discrimination rate is governed by dft_rate.
+            
+            # Buckets for parameters
+            params_embeddings = []
+            params_encoder = [[] for _ in range(12)]
+            params_classifier = []
 
-            encoder_params = []
-            num_layers = model.config.num_hidden_layers
-            for i in range(num_layers):
-                encoder_decay = {
-                    'params': [p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))],
+            for n, p in param_optimizer:
+                if 'embeddings' in n:
+                    params_embeddings.append((n, p))
+                elif 'encoder.layer' in n:
+                    # extract layer number usually bert.encoder.layer.X. ...
+                    # split by dot
+                    parts = n.split('.')
+                    # find index of 'layer'
+                    try:
+                        idx = parts.index('layer')
+                        layer_num = int(parts[idx + 1])
+                        params_encoder[layer_num].append((n, p))
+                    except (ValueError, IndexError):
+                        # Fallback if parsing fails (shouldn't happen for BERT), put in classifier bucket or log warning
+                        params_classifier.append((n, p))
+                else:
+                    # Pooler, classifier, etc.
+                    params_classifier.append((n, p))
+
+            optimizer_grouped_parameters = []
+            
+            # 1. Embeddings (furthest from output -> lowest LR)
+            # Power 13
+            optimizer_grouped_parameters.append({
+                'params': [p for n, p in params_embeddings if (not any(nd in n for nd in no_decay))],
+                'weight_decay': 0.01,
+                'lr': lr / (dft_rate ** 13)
+            })
+            optimizer_grouped_parameters.append({
+                'params': [p for n, p in params_embeddings if (any(nd in n for nd in no_decay))],
+                'weight_decay': 0.0,
+                'lr': lr / (dft_rate ** 13)
+            })
+
+            # 2. Encoder Layers (0 to 11)
+            # Layer 0 -> Power 12 ... Layer 11 -> Power 1
+            for i in range(12):
+                layer_params = params_encoder[i]
+                power = 12 - i
+                optimizer_grouped_parameters.append({
+                    'params': [p for n, p in layer_params if (not any(nd in n for nd in no_decay))],
                     'weight_decay': 0.01,
-                    'lr': lr / (dft_rate ** (num_layers - i))}
-                encoder_nodecay = {
-                    'params': [p for n, p in param_optimizer if (any(nd in n for nd in no_decay))],
+                    'lr': lr / (dft_rate ** power)
+                })
+                optimizer_grouped_parameters.append({
+                    'params': [p for n, p in layer_params if (any(nd in n for nd in no_decay))],
                     'weight_decay': 0.0,
-                    'lr': lr / (dft_rate ** (num_layers - i))}
-                encoder_params.append(encoder_decay)
-                encoder_params.append(encoder_nodecay)
+                    'lr': lr / (dft_rate ** power)
+                })
 
-            optimizer_grouped_parameters = [
-                {'params': [p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))],
-                 'weight_decay': 0.01,
-                 'lr': lr / (dft_rate ** 13)},
-                {'params': [p for n, p in param_optimizer if (any(nd in n for nd in no_decay))],
-                 'weight_decay': 0.0,
-                 'lr': lr / (dft_rate ** 13)},
-                {'params': [p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))],
-                 'weight_decay': 0.01,
-                 'lr': lr},
-                {'params': [p for n, p in param_optimizer if (any(nd in n for nd in no_decay))],
-                 'weight_decay': 0.0,
-                 'lr': lr},
-                {'params': [p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))],
-                 'weight_decay': 0.01,
-                 'lr': lr},
-                {'params': [p for n, p in param_optimizer if (any(nd in n for nd in no_decay))],
-                 'weight_decay': 0.0,
-                 'lr': lr}]
-
-            optimizer_grouped_parameters.extend(encoder_params)
-
+            # 3. Classifier / Output (highest LR)
+            optimizer_grouped_parameters.append({
+                'params': [p for n, p in params_classifier if (not any(nd in n for nd in no_decay))],
+                'weight_decay': 0.01,
+                'lr': lr
+            })
+            optimizer_grouped_parameters.append({
+                'params': [p for n, p in params_classifier if (any(nd in n for nd in no_decay))],
+                'weight_decay': 0.0,
+                'lr': lr
+            })
 
         else:
             param_optimizer = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
-
 
             optimizer_grouped_parameters = [
                 {'params': [p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))],

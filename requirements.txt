@@ -37,3 +37,7 @@ jaraco.collections==5.1.0
 pip-chill==1.0.3
 textblob==0.19.0
 tomli==2.0.1
+
+# LoRA Requirements
+peft==0.13.0
+accelerate==1.12.0

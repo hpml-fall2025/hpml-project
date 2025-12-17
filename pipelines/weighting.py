@@ -1,76 +1,64 @@
-import pandas as pd
-import numpy as np 
-import warnings
+import numpy as np
 import datetime as dt
 from collections import deque
+from typing import Tuple, Union, Optional
+
 from volatility import VolatilityPipeline
 from news import NewsPipeline
 
-class DynamicWeighting:
+
+class Weighting:
     def __init__(
         self,
-        lambda_har=0.2,
-        lambda_news=0.2,
-        norm_window=10,
-        warmup_steps=10,
-        eps=1e-8
+        lam: float = 0.1,                 # <-- new: scalar on news
+        warmup_steps: int = 10,
+        har_pipe: Optional[VolatilityPipeline] = None,
+        news_pipe: Optional[NewsPipeline] = None,
+        feature_weights: Tuple[float, float, float, float] = (0.5, 0.3, 0.15, 0.05),
+        delay_hours: int = 0,
+        k: int = 10,
+        norm_window: int = 20,
+        eps: float = 1e-8,
     ):
-        self.har_pipe = VolatilityPipeline()
-        self.news_pipe = NewsPipeline()
+        self.har_pipe = har_pipe if har_pipe is not None else VolatilityPipeline()
+        self.news_pipe = news_pipe if news_pipe is not None else NewsPipeline()
 
-        self.lambda_har = float(lambda_har)
-        self.lambda_news = float(lambda_news)
-        self.eps = float(eps)
-
-        self.norm_window = int(norm_window)
+        self.lam = float(lam)
         self.warmup_steps = int(warmup_steps)
 
-        self.rolling_har_error = 1.0
-        self.rolling_news_error = 1.0
+        self.feature_weights = tuple(float(x) for x in feature_weights)
+        self.delay_hours = int(delay_hours)
+        self.k = int(k)
+
+        self.norm_window = int(norm_window)
+        self.eps = float(eps)
 
         self.har_hist = deque(maxlen=self.norm_window)
         self.news_hist = deque(maxlen=self.norm_window)
 
-        self.prev_date = None
-        self.prev_H = None
-        self.prev_N = None
+        self.step = 0
 
-        self.step_count = 0
-
-    def _normalize_news(self, N_t: float) -> float:
+    def _normalize_news(self, N_raw: float) -> float:
         if len(self.har_hist) < 2 or len(self.news_hist) < 2:
-            return N_t
+            return float(N_raw)
 
         mu_h = float(np.mean(self.har_hist))
         sd_h = float(np.std(self.har_hist, ddof=0))
         mu_n = float(np.mean(self.news_hist))
         sd_n = float(np.std(self.news_hist, ddof=0))
 
-        return mu_h + (sd_h + self.eps) * (N_t - mu_n) / (sd_n + self.eps)
+        return mu_h + (sd_h + self.eps) * (float(N_raw) - mu_n) / (sd_n + self.eps)
 
-    def _update_rolling_errors(self, RV_prev: float):
-        if self.prev_H is None or self.prev_N is None:
-            return
-
-        har_sq = float((RV_prev - self.prev_H) ** 2)
-        news_sq = float((RV_prev - self.prev_N) ** 2)
-
-        self.rolling_har_error = self.lambda_har * har_sq + (1.0 - self.lambda_har) * self.rolling_har_error
-        self.rolling_news_error = self.lambda_news * news_sq + (1.0 - self.lambda_news) * self.rolling_news_error
-
-    def predict_weighted_vol(self, date) -> float:
-        """
-        Predicted V_t = H_t * rolling_news_error/(rolling_news_error + rolling_har_error) 
-                        + N_t * rolling_har_error/(rolling_news_error + rolling_har_error) 
-        """
-
-        H_t, RV_prev = self.har_pipe.predict_har_vol(date)
+    def predict_weighted_vol(self, when: Union[str, dt.datetime]) -> float:
+        H_t, _ = self.har_pipe.predict_har_vol(when)
         H_t = float(H_t)
 
-        if RV_prev is not None:
-            self._update_rolling_errors(float(RV_prev))
-
-        N_raw, num_headlines = self.news_pipe.predict_news_vol(date)
+        N_raw, _ = self.news_pipe.predict_news_vol(
+            when,
+            k=self.k,
+            feature_weights=self.feature_weights,
+            delay_hours=self.delay_hours,
+        )
         N_raw = float(N_raw)
 
         self.har_hist.append(H_t)
@@ -78,16 +66,10 @@ class DynamicWeighting:
 
         N_t = float(self._normalize_news(N_raw))
 
-        denom = self.rolling_news_error + self.rolling_har_error + self.eps
-
-        if self.step_count < self.warmup_steps:
+        if self.step < self.warmup_steps:
             V_t = H_t
         else:
-            V_t = (H_t * self.rolling_news_error + N_t * self.rolling_har_error) / denom
+            V_t = H_t + self.lam * N_t
 
-        self.prev_date = date
-        self.prev_H = H_t
-        self.prev_N = N_t
-        self.step_count += 1
-
+        self.step += 1
         return float(V_t)

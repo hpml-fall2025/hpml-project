@@ -25,6 +25,11 @@ class VolatilityPipelineSlow(Pipeline):
         self.medium_window_hours = int(medium_window_hours)
         self.long_window_hours = int(long_window_hours)
 
+        self.demo_mode = False
+        self.demo_current_hour_idx = 0
+        self.demo_start_hour_idx = 0
+        self.ground_truth_rv = pd.Series(dtype=float)
+
         self.train_end = pd.to_datetime(train_end).to_pydatetime()
 
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

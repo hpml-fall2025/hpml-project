@@ -6,10 +6,7 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
-try:
-    from .base import Pipeline
-except Exception:
-    from base import Pipeline
+from pipelines.base import Pipeline
 
 
 class VolatilityPipeline(Pipeline):
@@ -27,6 +24,11 @@ class VolatilityPipeline(Pipeline):
         self.medium_window_hours = int(medium_window_hours)
         self.long_window_hours = int(long_window_hours)
         self._max_window = int(max(self.short_window_hours, self.medium_window_hours, self.long_window_hours))
+
+        self.demo_mode = False
+        self.demo_current_hour_idx = 0
+        self.demo_start_hour_idx = 0
+        self.ground_truth_rv = pd.Series(dtype=float)
 
         self.train_end = pd.to_datetime(train_end).to_pydatetime()
         self.stream_lookback_days = int(stream_lookback_days)
@@ -55,6 +57,7 @@ class VolatilityPipeline(Pipeline):
             full_hist = full_hist.between_time("09:30", "16:59:59")
 
         self.full_hist_data = full_hist
+
 
         self._hour_index = pd.Index(self.full_hist_data.index.floor("h").unique()).sort_values()
 

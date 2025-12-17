@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 from volatility import VolatilityPipeline
 from news import NewsPipeline
-from simple_weighting import SimpleWeighting
+from weighting import Weighting
 
 import logging
 logging.getLogger().setLevel(logging.ERROR)
@@ -59,7 +59,7 @@ def main():
         long_window_hours=int(CFG["long_h"]),
     )
 
-    sw = SimpleWeighting(
+    sw = Weighting(
         lam=float(CFG["lam"]),
         warmup_steps=int(CFG["warmup_steps"]),
         har_pipe=har,
@@ -120,7 +120,7 @@ def main():
         plt.figure()
         plt.plot(sub["t"], sub["true_scaled"], label="True RV_hourly (scaled)")
         plt.plot(sub["t"], sub["har_scaled"], label="HAR (scaled)")
-        plt.plot(sub["t"], sub["weighted_scaled"], label="WEIGHTED (SimpleWeighting)")
+        plt.plot(sub["t"], sub["weighted_scaled"], label="WEIGHTED (Weighting)")
         plt.title(
             f"{m} — True vs HAR vs Weighted (scaled)\n"
             f"lam={CFG['lam']} delay={CFG['delay_hours']} short/med/long={CFG['short_h']}/{CFG['med_h']}/{CFG['long_h']} "

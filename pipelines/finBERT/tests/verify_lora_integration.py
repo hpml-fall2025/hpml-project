@@ -1,4 +1,12 @@
 
+#This script is a controlled experiment to verify that:
+# LoRA is actually enabled
+# Base model weights are frozen
+# Trainable parameter count drops dramatically
+# Training step time is faster than full fine-tuning
+# FinBERT integration disables incompatible features (discriminative FT, gradual unfreeze)
+
+
 import sys
 import os
 import shutil

@@ -10,6 +10,10 @@ pip install -r requirements.txt
 
 <img width="1546" height="444" alt="image" src="https://github.com/user-attachments/assets/0ffb2da1-f51c-4b15-85ef-3ad6c5c066e0" />
 
+## QuickStart
+
+1. Follow the instructions in pipelines/finbert to download the FinBERT model and place it in pipelines/finbert/models/sentiment/pytorch_model.bin.
+2. Run predict.py to predict volatility for a date. 
 
 ## Folder/file descriptions
 **dashboard** contains all the code/instructions for instantiating the dashboard. This dashboard is used to visualize the FinBERT predicitions, HAR-RV predictions, and the weighted final predictions for volatility. 

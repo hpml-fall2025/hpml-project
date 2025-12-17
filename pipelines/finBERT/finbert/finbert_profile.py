@@ -251,7 +251,14 @@ class ProfiledFinBert(FinBert):
                     with record_function("forward_pass"):
                         amp_ctx = torch.amp.autocast('cuda', enabled=True) if amp_enabled else nullcontext()
                         with amp_ctx:
-                            logits = model(input_ids, attention_mask, token_type_ids)[0]
+                            outputs = model(
+                                input_ids=input_ids,
+                                attention_mask=attention_mask,
+                                token_type_ids=token_type_ids,
+                            )
+                            logits = outputs.logits
+
+                            
                     
                     # Loss calculation profiling
                     with record_function("loss_calculation"):
@@ -375,7 +382,13 @@ class ProfiledFinBert(FinBert):
                 
                 amp_ctx = torch.amp.autocast('cuda', enabled=True) if amp_enabled else nullcontext()
                 with amp_ctx:
-                    logits = model(input_ids, attention_mask, token_type_ids)[0]
+                    outputs = model(
+                                input_ids=input_ids,
+                                attention_mask=attention_mask,
+                                token_type_ids=token_type_ids,
+                            )
+                    logits = outputs.logits
+
                     weights = self.class_weights.to(self.device)
                     
                     if self.config.output_mode == "classification":
@@ -440,8 +453,13 @@ class ProfiledFinBert(FinBert):
                 agree_ids = agree_ids.to(self.device)
                 
                 with torch.no_grad():
-                    logits = model(input_ids, attention_mask, token_type_ids)[0]
-                    
+                    outputs = model(
+                                input_ids=input_ids,
+                                attention_mask=attention_mask,
+                                token_type_ids=token_type_ids,
+                            )
+                    logits = outputs.logits
+
                     if self.config.output_mode == "classification":
                         loss_fct = CrossEntropyLoss(weight=weights)
                         tmp_valid_loss = loss_fct(logits.view(-1, self.num_labels), label_ids.view(-1))

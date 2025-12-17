@@ -487,7 +487,12 @@ class FinBert(object):
                 input_ids, attention_mask, token_type_ids, label_ids, agree_ids = batch
 
                 with torch.amp.autocast('cuda', enabled=self.config.use_amp):
-                    logits = model(input_ids, attention_mask, token_type_ids)[0]
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        token_type_ids=token_type_ids,
+                        )
+                    logits = outputs.logits
                     weights = self.class_weights.to(self.device)
 
                     if self.config.output_mode == "classification":
@@ -546,7 +551,12 @@ class FinBert(object):
                 agree_ids = agree_ids.to(self.device)
 
                 with torch.no_grad():
-                    logits = model(input_ids, attention_mask, token_type_ids)[0]
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        token_type_ids=token_type_ids,
+                    )
+                    logits = outputs.logits
 
                     if self.config.output_mode == "classification":
                         loss_fct = CrossEntropyLoss(weight=weights)
@@ -627,7 +637,12 @@ class FinBert(object):
             agree_ids = agree_ids.to(self.device)
 
             with torch.no_grad():
-                logits = model(input_ids, attention_mask, token_type_ids)[0]
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    token_type_ids=token_type_ids,
+                )
+                logits = outputs.logits
 
                 if self.config.output_mode == "classification":
                     loss_fct = CrossEntropyLoss()

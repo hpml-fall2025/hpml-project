@@ -36,6 +36,7 @@ class NewsPipeline(Pipeline):
         self.df = pd.read_csv(data_path)
         
         self.use_gpu = use_gpu
+        self._day_cache = {}
 
         self.df = self.df.drop('URL', axis=1)
         self.df['Timestamp'] = pd.to_datetime(
@@ -45,34 +46,87 @@ class NewsPipeline(Pipeline):
         )
         self.df['Timestamp'] = self.df['Timestamp'].apply(lambda x : x.date())
     
-    def predict_news_vol(self, date) -> Tuple[float, int]:
-        """
-        predicts volatility wrt news headlines with custom drop-off weighting
-        """
-        day_weights = [0.5, 0.25, 0.13, 0.07, 0.03]  
-        
-        vol = 0
+
+    def _get_day_stats(self, day_date):
+        if day_date in self._day_cache:
+            return self._day_cache[day_date]
+
+        day_rows = self.df.loc[self.df["Timestamp"] == day_date]
+        if len(day_rows) == 0:
+            self._day_cache[day_date] = (0.0, 0)
+            return 0.0, 0
+
+        day_headlines = day_rows["Headline"].tolist()
+        model_batch = " .".join(day_headlines)
+        results_df = predict(model_batch, self.model, use_gpu=self.use_gpu)
+        scores = results_df["sentiment_score"].values
+        day_avg_ss = float((scores ** 2).mean())
+        cnt = int(len(scores))
+
+        self._day_cache[day_date] = (day_avg_ss, cnt)
+        return day_avg_ss, cnt
+
+    def predict_news_vol(
+        self,
+        date,
+        day_weights=None,
+        delay=1,
+        k=25,
+        normalize_weights=True
+    ) -> Tuple[float, int]:
+        if day_weights is None:
+            day_weights = [0.5, 0.25, 0.13, 0.07, 0.03]  
+
+        w = np.array(day_weights, dtype=float)
+        if normalize_weights:
+            s = float(w.sum())
+            if s > 0:
+                w = w / s
+
+        vol = 0.0
         num_headlines = 0
-        delay = 1
-        
-        for i in range(len(day_weights)):
-            check_date = date - datetime.timedelta(days=i+delay)
-            mask = self.df["Timestamp"] == check_date
-            day_rows = self.df.loc[mask]
-            
-            if len(day_rows)==0:
+
+        for i in range(len(w)):
+            check_date = date - datetime.timedelta(days=int(delay) + i)
+            day_avg_ss, cnt = self._get_day_stats(check_date)
+            if cnt == 0:
                 continue
-            
-            day_headlines = day_rows["Headline"].tolist()
-            model_batch = " .".join(day_headlines) #we do this because the model splits by "." to figure out the seperate headlines
-            
-            results_df = predict(model_batch, self.model, use_gpu=self.use_gpu)
-            day_sentiment_scores = results_df['sentiment_score'].values
-            day_avg_ss = sum(day_sentiment_scores ** 2) / len(day_sentiment_scores) #average squared sentiment score for a fixed day
-            num_headlines += len(day_sentiment_scores)
-            vol += day_weights[i] * day_avg_ss
+            num_headlines += cnt
+            vol += float(w[i]) * day_avg_ss
+
+        conf = (num_headlines / (num_headlines + k)) if num_headlines > 0 else 0.0
+
+        return float(conf * vol), int(num_headlines)
+    
+    # def predict_news_vol(self, date) -> Tuple[float, int]:
+    #     """
+    #     predicts volatility wrt news headlines with custom drop-off weighting
+    #     """
+    #     #day_weights = [0.5, 0.25, 0.13, 0.07, 0.03]  
+    #     day_weights = [0.05, 0.15, 0.5, 0.25, 0.13, 0.07, 0.03]  
         
-        return vol, num_headlines
+    #     vol = 0
+    #     num_headlines = 0
+    #     delay = 0
+        
+    #     for i in range(len(day_weights)):
+    #         check_date = date - datetime.timedelta(days=i+delay)
+    #         mask = self.df["Timestamp"] == check_date
+    #         day_rows = self.df.loc[mask]
+            
+    #         if len(day_rows)==0:
+    #             continue
+            
+    #         day_headlines = day_rows["Headline"].tolist()
+    #         model_batch = " .".join(day_headlines) #we do this because the model splits by "." to figure out the seperate headlines
+            
+    #         results_df = predict(model_batch, self.model, use_gpu=self.use_gpu)
+    #         day_sentiment_scores = results_df['sentiment_score'].values
+    #         day_avg_ss = sum(day_sentiment_scores ** 2) / len(day_sentiment_scores) #average squared sentiment score for a fixed day
+    #         num_headlines += len(day_sentiment_scores)
+    #         vol += day_weights[i] * day_avg_ss
+        
+    #     return vol, num_headlines
 
             
     def get_latest_data(self, query_date) -> dict:

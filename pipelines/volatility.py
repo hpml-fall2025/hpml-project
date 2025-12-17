@@ -204,10 +204,6 @@ class VolatilityPipeline(Pipeline):
         return rv
 
 
-     
-
-
-
     def predict_har_vol(self, date) -> Tuple[float, float]:
         """"
         input: date to predict volatility on
@@ -250,7 +246,6 @@ class VolatilityPipeline(Pipeline):
         true_prev_rv = float(curr_rv.loc[prev_date, "RV_daily"])
 
         return prediction_for_target_date, true_prev_rv
-
 
 
     def get_latest_data(self) -> dict:

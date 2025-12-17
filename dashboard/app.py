@@ -23,10 +23,18 @@ def main():
         st.session_state.store = DataStore()
 
     if "news_pipe" not in st.session_state:
-        st.session_state.news_pipe = NewsPipeline()
+        try:
+            st.session_state.news_pipe = NewsPipeline()
+        except Exception as e:
+            st.error(f"Failed to initialize News Pipeline: {e}")
+            st.stop()
         
     if "vol_pipe" not in st.session_state:
-        st.session_state.vol_pipe = VolatilityPipeline()
+        try:
+            st.session_state.vol_pipe = VolatilityPipeline()
+        except Exception as e:
+            st.error(f"Failed to initialize Volatility Pipeline: {e}")
+            st.stop()
 
     if "is_running" not in st.session_state:
         st.session_state.is_running = True
@@ -69,18 +77,31 @@ def main():
         tframe = timeframe # capture current timeframe 
         
         # 1. Update Data
-        news_data = st.session_state.news_pipe.get_latest_data()
+        # Get volatility data first (it drives the timestamp in demo mode)
         vol_data = st.session_state.vol_pipe.get_latest_data()
         
-        # hypothetical headlines for demo
+        # Handle pipeline errors gracefully
+        if "error" in vol_data:
+            main_placeholder.warning(f"Volatility Pipeline: {vol_data['error']}")
+            return
+        
+        # Extract date from vol pipeline for synchronization in demo mode
         if demo_mode:
-            headline = st.session_state.news_pipe.get_headline()
+            ts_str = vol_data.get("timestamp")
+            query_date = pd.to_datetime(ts_str).date() if ts_str else None
+            news_data = st.session_state.news_pipe.get_latest_data(query_date)
+            headline = st.session_state.news_pipe.get_headline(query_date)
             news_placeholder.info(f"📰 **Hypothetical News**: {headline}")
         else:
+            # Live mode: news pipeline uses today's date
+            news_data = st.session_state.news_pipe.get_latest_data()
             news_placeholder.empty()
         
         # Ensure we use consistent keys for the frontend components
         pred_rv = vol_data.get("volatility_prediction", vol_data.get("har_rv", 0.0))
+        
+        # Get news_rv with fallback to 0.0 if missing
+        news_rv = news_data.get("news_rv", 0.0)
         
         # Timestamp handling
         ts = vol_data.get("timestamp", pd.Timestamp.now(tz="UTC"))
@@ -96,15 +117,15 @@ def main():
         new_record = {
             "timestamp": ts,
             "har_rv": pred_rv,
-            **news_data,
-            **{k:v for k,v in vol_data.items() if k not in ["volatility_prediction", "timestamp"]} 
+            "news_rv": news_rv,
+            **{k:v for k,v in vol_data.items() if k not in ["volatility_prediction", "timestamp", "error"]} 
         }
         
         import numpy as np
         rng = np.random.default_rng()
         
         # Simple aggregation for display
-        actual = 0.55 * news_data["news_rv"] + 0.45 * pred_rv + rng.normal(0.0, 0.02)
+        actual = 0.55 * news_rv + 0.45 * pred_rv + rng.normal(0.0, 0.02)
         new_record["actual_rv"] = float(max(actual, 1e-6))
         
         st.session_state.store.append_data(new_record)

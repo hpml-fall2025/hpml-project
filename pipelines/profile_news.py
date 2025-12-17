@@ -81,7 +81,7 @@ def main():
 
     wandb.init(
         entity="si2449-columbia-university",
-        project="streaming-finbert",
+        project="streaming-e2e",
         name="news_slow_vs_opt_metrics",
         config=cfg,
     )

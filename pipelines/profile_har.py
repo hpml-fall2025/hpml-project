@@ -82,7 +82,7 @@ def main():
 
     wandb.init(
         entity="si2449-columbia-university",
-        project="streaming-har-rv",
+        project="streaming-e2e",
         name="har_slow_vs_opt_metrics",
         config=cfg,
     )

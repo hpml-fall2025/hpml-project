@@ -1,14 +1,7 @@
 # FinBERT Pipeline: Quick Start Guide
 
-## 1. Installation
-Set up a virtual environment and install dependencies:
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
 
-## 2. Downloading Pretrained Models
+## 1. Downloading Pretrained Models
 - Download the [FinBERT Sentiment Model](https://prosus-public.s3-eu-west-1.amazonaws.com/finbert/finbert-sentiment/pytorch_model.bin).
 - Place it in a suitable directory, e.g., `models/sentiment/pytorch_model.bin`.
 - Copy a compatible `config.json` into the same directory.
@@ -21,14 +14,14 @@ pip install -r requirements.txt
     ```
 - Load the model in code with `.from_pretrained(<model_directory>)`.
 
-## 3. NLTK Setup
+## 2. NLTK Setup
 Install and setup the NLTK tokenizer:
 ```bash
 pip install nltk
 python -m nltk.downloader punkt
 ```
 
-## 4. Data Preparation
+## 3. Data Preparation
 - Download the [Financial PhraseBank dataset (Malo et al., 2014)](https://www.researchgate.net/publication/251231364_FinancialPhraseBank-v10/data/0c96051eee4fb1d56e000000/FinancialPhraseBank-v10.zip?origin=publication_list).
 - Extract and note the path to `Sentences_50Agree.txt`.
 - Create `data/sentiment_data/` and populate it with `train.csv`, `validation.csv`, and `test.csv` (splits).
@@ -37,7 +30,7 @@ python -m nltk.downloader punkt
     python scripts/datasets.py --data_path <path_to_Sentences_50Agree.txt>
     ```
 
-## 5. Training
+## 4. Training
 - Main training is handled in `finbert_training.ipynb` (other variants in `notebooks/`).
 - Models are saved to `models/`.
 - Example config:
@@ -58,10 +51,10 @@ python -m nltk.downloader punkt
     )
     ```
 
-## 6. Profiling
+## 5. Profiling
 Profile training performance with `baseline_profiling.ipynb` (adds PyTorch profiling to the baseline notebook).
 
-## 7. Available Model Variants
+## 6. Available Model Variants
 Notebooks in `notebooks/` explain and implement each of these:
 - **Baseline:** Standard FinBERT.
 - **Distilled BERT** (Base, Medium, Mini): Smaller, faster variants using knowledge distillation.

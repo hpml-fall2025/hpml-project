@@ -152,19 +152,19 @@ def main(
     print()
 
     delays = [0, 1]
-    short_hours_grid = [1, 2]
-    med_hours_grid = [4, 6]
-    long_hours_grid = [12, 24]
+    short_hours_grid = [1]
+    med_hours_grid = [4, 8]
+    long_hours_grid = [24, 48, 96]
 
-    ks = [10, 25]
-    norm_windows = [10, 20]
+    ks = [10]
+    norm_windows = [20]
 
-    lambda_har_grid = [0.2, 0.35, 0.5]
-    lambda_news_grid = [0.02, 0.05]
+    lambda_har_grid = [0.3]
+    lambda_news_grid = [0.1]
 
     feature_weights_grid = [
-        (1.0, 0.0, 0.0, 0.0),
-        (0.6, 0.3, 0.1, 0.0),
+        #(1.0, 0.0, 0.0, 0.0),
+        #(0.6, 0.3, 0.1, 0.0),
         (0.5, 0.3, 0.15, 0.05),
         (0.4, 0.3, 0.2, 0.1),
     ]

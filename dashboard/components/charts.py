@@ -61,7 +61,7 @@ def render_charts(df: pd.DataFrame, weight: float):
     main_fig = _plot_series(
         df,
         traces={
-            "true_rv": {"label": "True RV (scaled)", "color": "#ef4444"},
+            "true_rv": {"label": "True RV", "color": "#ef4444"},
             main_pred_col: {
                 "label": "Combined Prediction" if main_pred_col == "weighted_rv" else "HAR Prediction",
                 "color": "#3b82f6",
@@ -71,7 +71,7 @@ def render_charts(df: pd.DataFrame, weight: float):
                 "color": "#22c55e",
             },
         },
-        title="Hourly: Prediction vs True (scaled)",
+        title="Hourly: Prediction vs True",
         y_title="Scaled RV",
         y_range=MAIN_Y_RANGE,
     )

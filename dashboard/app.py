@@ -253,7 +253,7 @@ def main():
             _step_once()
             time.sleep(float(refresh_rate))
             if st.session_state.bt_finished:
-                time.sleep(60)
+                time.sleep(10)
     else:
         _step_once()
 

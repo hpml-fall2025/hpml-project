@@ -1,6 +1,6 @@
 import os
 import datetime as dt
-from typing import Tuple, Optional, Union
+from typing import Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -18,6 +18,7 @@ class VolatilityPipeline(Pipeline):
         short_window_hours: int = 6,
         medium_window_hours: int = 30,
         long_window_hours: int = 120,
+        train_end: Union[str, dt.datetime, pd.Timestamp] = "2021-01-01 23:59:59",
     ):
         self.model = None
 
@@ -31,23 +32,43 @@ class VolatilityPipeline(Pipeline):
         self.ground_truth_rv = pd.Series(dtype=float)
         self.full_hour_index = None
 
+        self.train_end = pd.to_datetime(train_end).to_pydatetime()
+
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         csv_path = os.path.join(base_dir, "SPY1min_clean.csv")
 
         try:
             model_data = pd.read_csv(csv_path)
             model_data["date"] = pd.to_datetime(model_data["date"])
-            model_data = model_data.set_index("date").sort_index()
 
+            model_data["date"] = (
+                model_data["date"]
+                .dt.tz_localize("America/Denver")
+                .dt.tz_convert("America/New_York")
+                .dt.tz_localize(None)
+            )
+
+            model_data = model_data.set_index("date").sort_index()
             model_data = model_data[~model_data.index.duplicated(keep="last")]
             model_data = model_data.dropna(subset=["close"])
 
-            self.full_hist_data = model_data[["open", "high", "low", "close", "volume"]].copy()
+            full_hist = model_data[["open", "high", "low", "close", "volume"]].copy()
+
+            try:
+                full_hist = full_hist.between_time("09:30", "16:59:59", inclusive="both")
+            except TypeError:
+                full_hist = full_hist.between_time("09:30", "16:59:59")
+
+            self.full_hist_data = full_hist
 
             full_rv = self.__rv_calculation(self.full_hist_data)
             self.full_hour_index = full_rv.index.to_list()
 
-            self._train_model(self.full_hist_data)
+            train_hist = self.full_hist_data.loc[:pd.Timestamp(self.train_end)]
+            if train_hist.empty:
+                raise ValueError("Training slice is empty (check train_end and timestamp parsing).")
+
+            self._train_model(train_hist)
 
         except Exception as e:
             print(f"Error initializing VolatilityPipeline: {e}")
@@ -76,46 +97,6 @@ class VolatilityPipeline(Pipeline):
         except Exception as e:
             print(f"Error training model: {e}")
             self.model = None
-
-    def setup_demo_mode(self, test_ratio: float = 0.2):
-        if self.full_hour_index is None or len(self.full_hour_index) == 0:
-            raise ValueError("Hourly index not available for demo mode")
-
-        self.demo_mode = True
-
-        n = len(self.full_hour_index)
-        split_idx = int(n * (1.0 - float(test_ratio)))
-        split_idx = max(0, min(split_idx, n - 1))
-
-        self.demo_start_hour_idx = split_idx
-        self.demo_current_hour_idx = split_idx
-
-        train_end_hour = self.full_hour_index[split_idx]
-        train_end_ts = train_end_hour + dt.timedelta(hours=1) - dt.timedelta(microseconds=1)
-        train_data = self.full_hist_data.loc[:train_end_ts]
-
-        self._train_model(train_data)
-
-        full_rv = self.__rv_calculation(self.full_hist_data)
-        self.ground_truth_rv = full_rv["RV_hourly"].shift(-1)
-
-    def _get_latest_data(self) -> pd.DataFrame:
-        if not self.demo_mode:
-            return pd.DataFrame()
-
-        if self.full_hour_index is None or len(self.full_hour_index) == 0:
-            return pd.DataFrame()
-
-        idx = self.demo_current_hour_idx
-        if idx < 0 or idx >= len(self.full_hour_index):
-            return pd.DataFrame()
-
-        end_hour = self.full_hour_index[idx]
-        end_ts = end_hour + dt.timedelta(hours=1) - dt.timedelta(microseconds=1)
-
-        lookback_start = end_ts - dt.timedelta(days=30)
-
-        return self.full_hist_data.loc[lookback_start:end_ts]
 
     def __rv_calculation(self, df: pd.DataFrame) -> pd.DataFrame:
         x = df.copy()
@@ -189,42 +170,4 @@ class VolatilityPipeline(Pipeline):
         return pred, true_prev_rv
 
     def get_latest_data(self) -> dict:
-        if self.model is None:
-            return {"error": "Model not initialized"}
-
-        curr_data = self._get_latest_data()
-        if curr_data.empty:
-            return {"error": "No data retrieved"}
-
-        curr_rv = self.__rv_calculation(curr_data)
-        if curr_rv.empty:
-            return {"error": "Not enough data for hourly rolling windows"}
-
-        cols = ["RV_hourly", "RV_short", "RV_medium", "RV_long"]
-        denom = (self.train_max[cols] - self.train_min[cols]).replace(0.0, np.nan)
-        curr_scaled = (curr_rv[cols] - self.train_min[cols]) / denom
-        curr_scaled = curr_scaled.dropna()
-        if curr_scaled.empty:
-            return {"error": "Scaling produced empty features"}
-
-        last_hour = curr_scaled.index[-1]
-        last_row = curr_scaled.iloc[[-1]].copy()
-        last_row["const"] = 1.0
-        last_row = last_row[self.model.params.index]
-
-        prediction = float(self.model.predict(last_row).iloc[0])
-        result = {"volatility_prediction": prediction, "timestamp": str(last_hour)}
-
-        if self.demo_mode:
-            current_hour = last_hour
-            if self.ground_truth_rv is not None and current_hour in self.ground_truth_rv.index:
-                actual = self.ground_truth_rv.loc[current_hour]
-                result["actual_next_hour_rv"] = float(actual) if pd.notna(actual) else None
-            else:
-                result["actual_next_hour_rv"] = None
-
-            self.demo_current_hour_idx += 1
-            if self.demo_current_hour_idx >= len(self.full_hour_index):
-                result["demo_ended"] = True
-
-        return result
+        return {"error": "get_latest_data not used in backtest dashboard"}

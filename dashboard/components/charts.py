@@ -2,6 +2,10 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 
+MAIN_Y_RANGE = (0.008, 0.145)   # True vs Weighted (scaled RV)
+HAR_Y_RANGE  = (0.020, 0.115)   # HAR pred (scaled RV)
+NEWS_Y_RANGE = (0.0, 0.30)      # News signal (always >= 0)
+
 def _plot_series(
     df: pd.DataFrame,
     traces: dict[str, dict],
@@ -35,6 +39,13 @@ def _plot_series(
         plot_bgcolor="rgba(0,0,0,0)",
     )
 
+    fig.update_xaxes(
+        rangebreaks=[
+            dict(bounds=["sat", "mon"]),
+            dict(bounds=[16.1, 9.5], pattern="hour"),
+        ]
+    )
+
     if y_range is not None:
         fig.update_yaxes(range=[float(y_range[0]), float(y_range[1])])
 
@@ -45,18 +56,24 @@ def render_charts(df: pd.DataFrame, weight: float):
         return
 
     main_pred_col = "weighted_rv" if "weighted_rv" in df.columns else "har_rv"
+    har_pred_col = "har_rv"
 
     main_fig = _plot_series(
         df,
         traces={
             "true_rv": {"label": "True RV (scaled)", "color": "#ef4444"},
             main_pred_col: {
-                "label": "Weighted Prediction" if main_pred_col == "weighted_rv" else "HAR Prediction",
+                "label": "Combined Prediction" if main_pred_col == "weighted_rv" else "HAR Prediction",
                 "color": "#3b82f6",
+            },
+            har_pred_col: {
+                "label": "HAR-RV Prediction" if main_pred_col == "weighted_rv" else "HAR Prediction",
+                "color": "#22c55e",
             },
         },
         title="Hourly: Prediction vs True (scaled)",
         y_title="Scaled RV",
+        y_range=MAIN_Y_RANGE,
     )
     st.plotly_chart(main_fig, use_container_width=True)
 
@@ -64,18 +81,19 @@ def render_charts(df: pd.DataFrame, weight: float):
     with c1:
         fig_news = _plot_series(
             df,
-            traces={"news_rv": {"label": "News Signal", "color": "#22c55e"}},
+            traces={"news_rv": {"label": "News Signal", "color": "#a855f7"}},
             title="News signal (scaled space)",
             y_title="News value",
-            y_range=(-0.5, 0.5),
+            y_range=NEWS_Y_RANGE,
         )
         st.plotly_chart(fig_news, use_container_width=True)
 
     with c2:
         fig_har = _plot_series(
             df,
-            traces={"har_rv": {"label": "HAR Prediction", "color": "#a855f7"}},
+            traces={"har_rv": {"label": "HAR Prediction", "color": "#22c55e"}},
             title="HAR prediction (scaled space)",
             y_title="Scaled RV",
+            y_range=HAR_Y_RANGE,
         )
         st.plotly_chart(fig_har, use_container_width=True)

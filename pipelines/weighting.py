@@ -6,6 +6,10 @@ from typing import Tuple, Union, Optional
 from pipelines.news import NewsPipeline
 from pipelines.volatility import VolatilityPipeline
 
+mu_h = 0.0463
+sd_h = 0.0179
+mu_n = 0.0116
+sd_n = 0.0381
 
 
 class Weighting:
@@ -40,14 +44,6 @@ class Weighting:
         self.step = 0
 
     def _normalize_news(self, N_raw: float) -> float:
-        if len(self.har_hist) < 2 or len(self.news_hist) < 2:
-            return float(N_raw)
-
-        mu_h = float(np.mean(self.har_hist))
-        sd_h = float(np.std(self.har_hist, ddof=0))
-        mu_n = float(np.mean(self.news_hist))
-        sd_n = float(np.std(self.news_hist, ddof=0))
-
         return mu_h + (sd_h + self.eps) * (float(N_raw) - mu_n) / (sd_n + self.eps)
 
     def predict_weighted_vol(self, when: Union[str, dt.datetime]) -> float:
@@ -67,10 +63,7 @@ class Weighting:
 
         N_t = float(self._normalize_news(N_raw))
 
-        if self.step < self.warmup_steps:
-            V_t = H_t
-        else:
-            V_t = H_t + self.lam * N_t
+        V_t = H_t + self.lam * N_t
 
         self.step += 1
         return float(V_t)

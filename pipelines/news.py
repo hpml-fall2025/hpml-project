@@ -58,22 +58,25 @@ class NewsPipeline(Pipeline):
         )
 
         self.df["Timestamp_hour"] = self.df["Timestamp"].dt.floor("h")
+        self.df["Timestamp_hour"] = pd.to_datetime(self.df["Timestamp_hour"]).dt.floor("H")
         self._hour_cache = {}
 
-    def _to_hour(self, when: Union[str, dt.datetime, pd.Timestamp]) -> dt.datetime:
-        ts = pd.to_datetime(when)
-        if getattr(ts, "tzinfo", None) is not None:
+    def _to_hour(self, when: Union[str, dt.datetime, pd.Timestamp]) -> pd.Timestamp:
+        ts = pd.Timestamp(when)
+        if ts.tzinfo is not None:
             ts = ts.tz_convert("America/New_York").tz_localize(None)
-        ts = ts.to_pydatetime()
-        return ts.replace(minute=0, second=0, microsecond=0)
+        return ts.floor("H")
 
-    def _get_hour_stats(self, hour_ts: dt.datetime) -> Tuple[float, int]:
-        if hour_ts in self._hour_cache:
-            return self._hour_cache[hour_ts]
 
-        rows = self.df.loc[self.df["Timestamp_hour"] == hour_ts]
+    def _get_hour_stats(self, hour_ts: Union[dt.datetime, pd.Timestamp]) -> Tuple[float, int]:
+        h = pd.Timestamp(hour_ts).floor("H")
+
+        if h in self._hour_cache:
+            return self._hour_cache[h]
+
+        rows = self.df.loc[self.df["Timestamp_hour"] == h]
         if len(rows) == 0:
-            self._hour_cache[hour_ts] = (0.0, 0)
+            self._hour_cache[h] = (0.0, 0)
             return 0.0, 0
 
         headlines = rows["Headline"].tolist()
@@ -83,26 +86,31 @@ class NewsPipeline(Pipeline):
         scores = res["sentiment_score"].values.astype(float)
 
         if len(scores) == 0:
-            self._hour_cache[hour_ts] = (0.0, 0)
+            self._hour_cache[h] = (0.0, 0)
             return 0.0, 0
 
         avg_ss = float(np.mean(scores ** 2))
         cnt = int(len(scores))
 
-        self._hour_cache[hour_ts] = (avg_ss, cnt)
+        self._hour_cache[h] = (avg_ss, cnt)
         return avg_ss, cnt
 
-    def _build_hourly_series(self, start_hour: dt.datetime, end_hour: dt.datetime) -> pd.DataFrame:
-        hours = pd.date_range(start_hour, end_hour, freq="h")
+
+    def _build_hourly_series(self, start_hour: Union[dt.datetime, pd.Timestamp], end_hour: Union[dt.datetime, pd.Timestamp]) -> pd.DataFrame:
+        start_h = pd.Timestamp(start_hour).floor("H")
+        end_h = pd.Timestamp(end_hour).floor("H")
+
+        hours = pd.date_range(start_h, end_h, freq="H")
         vals = np.zeros(len(hours), dtype=float)
         cnts = np.zeros(len(hours), dtype=int)
 
         for i, h in enumerate(hours):
-            avg_ss, c = self._get_hour_stats(h.to_pydatetime())
+            avg_ss, c = self._get_hour_stats(h)
             vals[i] = avg_ss
             cnts[i] = c
 
-        return pd.DataFrame({"N_hourly": vals, "N_cnt": cnts}, index=hours.to_pydatetime())
+        return pd.DataFrame({"N_hourly": vals, "N_cnt": cnts}, index=hours)
+
 
     def predict_news_vol(
         self,
@@ -112,10 +120,10 @@ class NewsPipeline(Pipeline):
         delay_hours: int = 1,
     ) -> Tuple[float, int]:
         target_hour = self._to_hour(when)
-        prev_hour = target_hour - dt.timedelta(hours=int(delay_hours))
+        prev_hour = target_hour - pd.Timedelta(hours=int(delay_hours))
 
         end_hour = prev_hour
-        start_hour = end_hour - dt.timedelta(hours=int(self.long_window_hours) + 8)
+        start_hour = end_hour - pd.Timedelta(hours=int(self.long_window_hours) + 8)
 
         series = self._build_hourly_series(start_hour, end_hour)
         if series.empty:
@@ -142,13 +150,16 @@ class NewsPipeline(Pipeline):
         conf = (n_used / (n_used + int(k))) if n_used > 0 else 0.0
         return float(conf * raw_val), int(n_used)
 
+
     def get_headline(self, when: Union[str, dt.datetime], delay_hours: int = 1) -> str:
         target_hour = self._to_hour(when)
-        prev_hour = target_hour - dt.timedelta(hours=int(delay_hours))
+        prev_hour = target_hour - pd.Timedelta(hours=int(delay_hours))
+
         rows = self.df.loc[self.df["Timestamp_hour"] == prev_hour]
         if len(rows) == 0:
-            return ""
+            return "No headlines in this hour."
         return str(rows["Headline"].iloc[0])
+
 
     def get_latest_data(
         self,

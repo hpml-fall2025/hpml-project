@@ -30,8 +30,8 @@ CFG = {
     "warmup_steps": 10,
 }
 
-BACKTEST_START = dt.datetime(2021, 1, 4, 10, 0, 0)
-BACKTEST_END = dt.datetime(2021, 3, 31, 16, 0, 0)
+BACKTEST_START = dt.datetime(2021, 1, 5, 10, 0, 0)
+BACKTEST_END   = dt.datetime(2021, 3, 31, 16, 0, 0)  # last plotted hour = 16:00 (3–4pm)
 
 DEBUG_NEWS = True
 
@@ -47,10 +47,16 @@ def _build_hourly_rv_df(har: VolatilityPipeline) -> pd.DataFrame:
     rv_calc = har._VolatilityPipeline__rv_calculation
     rv_df = rv_calc(har.full_hist_data).copy()
     rv_df = rv_df[~rv_df.index.duplicated(keep="last")].sort_index()
+
     rv_df = rv_df.loc[
         (rv_df.index >= pd.Timestamp(BACKTEST_START)) &
         (rv_df.index <= pd.Timestamp(BACKTEST_END))
     ]
+
+    # STRICT market-hour buckets: keep 09:00..16:00 only.
+    # 09:00 bucket contains 09:30–09:59, 16:00 bucket contains 16:00–16:59 (4-5pm).
+    rv_df = rv_df[(rv_df.index.hour >= 9) & (rv_df.index.hour <= 16)]
+
     return rv_df
 
 
@@ -92,6 +98,7 @@ def _init_backtest_state():
     st.session_state.ts_list = ts_list
     st.session_state.bt_i = 0
     st.session_state.store = DataStore()
+    st.session_state.bt_finished = False
 
     try:
         st.session_state.news_tmin = pd.to_datetime(news.df["Timestamp_hour"]).min()
@@ -102,6 +109,10 @@ def _init_backtest_state():
 
     st.session_state.rv_tmin = rv_df.index.min()
     st.session_state.rv_tmax = rv_df.index.max()
+
+    st.session_state.agg_n = 0
+    st.session_state.agg_sum_abs_comb = 0.0
+    st.session_state.agg_sum_abs_har = 0.0
 
 
 def main():
@@ -119,9 +130,6 @@ def main():
         st.session_state.reset_backtest = False
         _init_backtest_state()
 
-    if st.session_state.get("news_tmin", None) is not None:
-        st.caption(f"news hours: {st.session_state.news_tmin} → {st.session_state.news_tmax}")
-    st.caption(f"rv hours:   {st.session_state.rv_tmin} → {st.session_state.rv_tmax}")
 
     c1, c2 = st.columns([0.85, 0.15])
     with c2:
@@ -141,8 +149,9 @@ def main():
 
         i = st.session_state.bt_i
         if i >= len(ts_list):
-            main_placeholder.info("Backtest finished (reached end of time window).")
             st.session_state.is_running = False
+            st.toast("Backtest finished.")
+            st.session_state.bt_finished = True
             return
 
         t = ts_list[i]
@@ -213,6 +222,13 @@ def main():
             weighted_pred = float(w.predict_weighted_vol(tt))
         except Exception:
             weighted_pred = har_pred_scaled
+        
+        abs_err = abs(weighted_pred - true_scaled)
+        har_abs_err = abs(har_pred_scaled - true_scaled)
+
+        st.session_state.agg_n += 1
+        st.session_state.agg_sum_abs_comb += float(abs_err)
+        st.session_state.agg_sum_abs_har += float(har_abs_err)
 
         new_record = {
             "timestamp": pd.Timestamp(t),
@@ -236,6 +252,8 @@ def main():
         while True:
             _step_once()
             time.sleep(float(refresh_rate))
+            if st.session_state.bt_finished:
+                time.sleep(60)
     else:
         _step_once()
 

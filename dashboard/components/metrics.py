@@ -10,21 +10,25 @@ def render_metrics(df: pd.DataFrame, weight: float = 0.0):
 
     true_rv = float(latest.get("true_rv", 0.0))
     har_rv = float(latest.get("har_rv", 0.0))
-    news_rv = float(latest.get("news_rv", 0.0))
     weighted_rv = float(latest.get("weighted_rv", har_rv))
-    news_cnt = int(latest.get("news_cnt", 0))
 
-    abs_err = abs(weighted_rv - true_rv)
+    n = int(st.session_state.get("agg_n", 0))
+    sum_comb = float(st.session_state.get("agg_sum_abs_comb", 0.0))
+    sum_har = float(st.session_state.get("agg_sum_abs_har", 0.0))
 
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    agg_abs_err = (sum_comb / n) if n > 0 else 0.0
+    agg_har_abs_err = (sum_har / n) if n > 0 else 0.0
+
+    kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
     with kpi1:
-        st.metric("Weighted RV", f"{weighted_rv:.6f}", delta_color="off")
-    with kpi2:
         st.metric("True RV", f"{true_rv:.6f}", delta_color="off")
+    with kpi2:
+        st.metric("HAR-RV", f"{har_rv:.6f}", delta_color="off")
     with kpi3:
-        st.metric("Abs Error", f"{abs_err:.6f}", delta_color="off")
+        st.metric("Combined RV", f"{weighted_rv:.6f}", delta_color="off")
     with kpi4:
-        st.metric("News Cnt", f"{news_cnt:d}", delta_color="off")
+        st.metric("Mean Abs Error (Combined)", f"{agg_abs_err:.6f}", delta_color="off")
+    with kpi5:
+        st.metric("Mean Abs Error (HAR-RV)", f"{agg_har_abs_err:.6f}", delta_color="off")
 
-    st.caption(f"HAR={har_rv:.6f}  News={news_rv:.6f}")
     st.markdown("---")

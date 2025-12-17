@@ -8,7 +8,7 @@ sys.path.append(os.path.dirname(current_dir))
 
 import numpy as np
 import pandas as pd
-from finBERT.finbert.finbert import predict
+from finbert.finbert import predict
 from transformers import AutoModelForSequenceClassification
 from pipelines.base import Pipeline
 import datetime 
@@ -75,7 +75,19 @@ class NewsPipeline(Pipeline):
         return vol, num_headlines
 
             
-    def get_latest_data(self, query_date) -> dict:
+    def get_latest_data(self, query_date=None) -> dict:
+        """
+        Returns news-based volatility signal for a given date.
+        
+        Args:
+            query_date: Date to query (defaults to today for live mode)
+            
+        Returns:
+            dict with 'news_rv' key containing the volatility signal
+        """
+        if query_date is None:
+            query_date = datetime.date.today()
+        
         day_weights = [0.5, 0.25, 0.13, 0.07, 0.03]  
         
         vol = 0
@@ -96,7 +108,36 @@ class NewsPipeline(Pipeline):
             day_avg_ss = sum(day_sentiment_scores ** 2) / len(day_sentiment_scores) #average squared sentiment score for a fixed day
             vol += day_weights[i] * day_avg_ss
             
-        return vol
+        return {"news_rv": vol}
+    
+    def get_headline(self, query_date=None) -> str:
+        """
+        Returns a headline near the given date for demo display.
+        
+        Args:
+            query_date: Date to find headlines near (defaults to today)
+            
+        Returns:
+            A headline string for display
+        """
+        if query_date is None:
+            query_date = datetime.date.today()
+        
+        # Look for headlines on the query date or within the past 5 days
+        for days_back in range(6):
+            check_date = query_date - datetime.timedelta(days=days_back)
+            mask = self.df["Timestamp"] == check_date
+            day_rows = self.df.loc[mask]
+            
+            if len(day_rows) > 0:
+                # Return a random headline from this day
+                return day_rows["Headline"].sample(n=1).iloc[0]
+        
+        # Fallback: return any random headline if no match found
+        if len(self.df) > 0:
+            return self.df["Headline"].sample(n=1).iloc[0]
+        
+        return "No headlines available"
 
 #Example usage:
 # news_pipe = NewsPipeline()

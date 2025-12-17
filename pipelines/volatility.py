@@ -206,8 +206,6 @@ class VolatilityPipeline(Pipeline):
 
      
 
-
-
     def predict_har_vol(self, date) -> Tuple[float, float]:
         """"
         input: date to predict volatility on

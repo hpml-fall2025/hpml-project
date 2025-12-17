@@ -3,8 +3,9 @@ import datetime as dt
 from collections import deque
 from typing import Tuple, Union, Optional
 
-from volatility import VolatilityPipeline
-from news import NewsPipeline
+from pipelines.news import NewsPipeline
+from pipelines.volatility import VolatilityPipeline
+
 
 
 class Weighting:

@@ -31,13 +31,17 @@ CFG = {
 }
 
 BACKTEST_START = dt.datetime(2021, 1, 4, 10, 0, 0)
-BACKTEST_END   = dt.datetime(2021, 3, 31, 16, 0, 0)
+BACKTEST_END = dt.datetime(2021, 3, 31, 16, 0, 0)
+
+DEBUG_NEWS = True
+
 
 def _true_scaled(rv_df: pd.DataFrame, ts: pd.Timestamp, har: VolatilityPipeline, rv_col: str) -> float:
     return float(
         (rv_df.loc[ts, rv_col] - har.train_min[rv_col])
         / (har.train_max[rv_col] - har.train_min[rv_col])
     )
+
 
 def _build_hourly_rv_df(har: VolatilityPipeline) -> pd.DataFrame:
     rv_calc = har._VolatilityPipeline__rv_calculation
@@ -48,6 +52,7 @@ def _build_hourly_rv_df(har: VolatilityPipeline) -> pd.DataFrame:
         (rv_df.index <= pd.Timestamp(BACKTEST_END))
     ]
     return rv_df
+
 
 def _init_backtest_state():
     har = VolatilityPipeline(
@@ -86,8 +91,18 @@ def _init_backtest_state():
     st.session_state.rv_df = rv_df
     st.session_state.ts_list = ts_list
     st.session_state.bt_i = 0
-
     st.session_state.store = DataStore()
+
+    try:
+        st.session_state.news_tmin = pd.to_datetime(news.df["Timestamp_hour"]).min()
+        st.session_state.news_tmax = pd.to_datetime(news.df["Timestamp_hour"]).max()
+    except Exception:
+        st.session_state.news_tmin = None
+        st.session_state.news_tmax = None
+
+    st.session_state.rv_tmin = rv_df.index.min()
+    st.session_state.rv_tmax = rv_df.index.max()
+
 
 def main():
     init_page()
@@ -103,6 +118,10 @@ def main():
     if st.session_state.get("reset_backtest", False) or ("har" not in st.session_state):
         st.session_state.reset_backtest = False
         _init_backtest_state()
+
+    if st.session_state.get("news_tmin", None) is not None:
+        st.caption(f"news hours: {st.session_state.news_tmin} → {st.session_state.news_tmax}")
+    st.caption(f"rv hours:   {st.session_state.rv_tmin} → {st.session_state.rv_tmax}")
 
     c1, c2 = st.columns([0.85, 0.15])
     with c2:
@@ -144,6 +163,7 @@ def main():
             st.session_state.bt_i += 1
             return
 
+        news_err = None
         try:
             news_val, news_cnt = news.predict_news_vol(
                 tt,
@@ -153,33 +173,54 @@ def main():
             )
             news_val = float(news_val)
             news_cnt = int(news_cnt)
-        except Exception:
+        except Exception as e:
             news_val = 0.0
             news_cnt = 0
+            news_err = str(e)
+
+        if DEBUG_NEWS:
+            try:
+                prev_hour = news._to_hour(tt) - dt.timedelta(hours=int(CFG["delay_hours"]))
+                matched = int((news.df["Timestamp_hour"] == prev_hour).sum())
+            except Exception:
+                pass
+
+        headline = ""
+        headline_ts = None
+        try:
+            headline = news.get_headline(tt, delay_hours=CFG["delay_hours"])
+            if headline and "No headlines" not in headline:
+                headline_ts = (pd.Timestamp(t).tz_localize(None) - pd.Timedelta(hours=CFG["delay_hours"]))
+        except Exception:
+            headline = ""
+
+        if headline and "No headlines" not in headline:
+            st.session_state.last_headline = headline
+            st.session_state.last_headline_ts = headline_ts
+
+        last_h = st.session_state.get("last_headline", "")
+        last_ts = st.session_state.get("last_headline_ts", None)
+
+        if last_h:
+            ts_str = ""
+            if last_ts is not None:
+                ts_str = f" ({pd.Timestamp(last_ts).strftime('%Y-%m-%d %H:%M')})"
+            news_placeholder.info(f"📰 {last_h}{ts_str}")
+        else:
+            news_placeholder.info("📰 (no headlines yet in this backtest window)")
 
         try:
             weighted_pred = float(w.predict_weighted_vol(tt))
         except Exception:
             weighted_pred = har_pred_scaled
 
-        headline = ""
-        try:
-            headline = news.get_headline(t.date())
-        except Exception:
-            headline = ""
-
-        if headline:
-            news_placeholder.info(f"📰 {headline}  (cnt={news_cnt})")
-        else:
-            news_placeholder.empty()
-
         new_record = {
             "timestamp": pd.Timestamp(t),
             "true_rv": true_scaled,
             "har_rv": har_pred_scaled,
-            "news_rv": news_val,
-            "weighted_rv": weighted_pred,
-            "news_cnt": news_cnt,
+            "news_rv": float(news_val),
+            "weighted_rv": float(weighted_pred),
+            "news_cnt": int(news_cnt),
         }
 
         st.session_state.store.append_data(new_record)
@@ -197,6 +238,7 @@ def main():
             time.sleep(float(refresh_rate))
     else:
         _step_once()
+
 
 if __name__ == "__main__":
     main()

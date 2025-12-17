@@ -16,6 +16,7 @@ from transformers import AutoTokenizer
 from peft import LoraConfig, TaskType, get_peft_model
 
 logger = logging.getLogger(__name__)
+_PRED_TOKENIZER = None
 
 
 class Config(object):
@@ -380,7 +381,7 @@ class FinBert(object):
         dataloader: DataLoader
             The data loader object.
         """
-
+        
         features = convert_examples_to_features(examples, self.label_list,
                                                 self.config.max_seq_length,
                                                 self.tokenizer,
@@ -725,6 +726,12 @@ def predict(text, model, write_to_csv=False, path=None, use_gpu=False, gpu_name=
     result = pd.DataFrame(columns=['sentence', 'logit', 'prediction', 'sentiment_score'])
     for batch in chunks(sentences, batch_size):
         examples = [InputExample(str(i), sentence) for i, sentence in enumerate(batch)]
+
+        global _PRED_TOKENIZER
+        if _PRED_TOKENIZER is None:
+            _PRED_TOKENIZER = AutoTokenizer.from_pretrained("bert-base-uncased")
+
+        tokenizer = _PRED_TOKENIZER
 
         features = convert_examples_to_features(examples, label_list, 64, tokenizer)
 

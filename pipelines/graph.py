@@ -134,7 +134,7 @@ def main():
         long_window_hours=int(CFG["long_h"]),
     )
 
-    sw = SimpleWeighting(
+    sw = Weighting(
         lam=float(CFG["lam"]),
         warmup_steps=int(CFG["warmup_steps"]),
         har_pipe=har,

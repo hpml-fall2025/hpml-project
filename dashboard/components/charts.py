@@ -43,9 +43,6 @@ def _plot_series(
 def render_charts(df: pd.DataFrame, weight: float):
     if df.empty:
         return
-    st.caption(f"news_rv min/max: {df['news_rv'].min():.6f} / {df['news_rv'].max():.6f}")
-    if "news_cnt" in df.columns:
-        st.caption(f"news_cnt min/max: {int(df['news_cnt'].min())} / {int(df['news_cnt'].max())}")
 
     main_pred_col = "weighted_rv" if "weighted_rv" in df.columns else "har_rv"
 
@@ -53,7 +50,10 @@ def render_charts(df: pd.DataFrame, weight: float):
         df,
         traces={
             "true_rv": {"label": "True RV (scaled)", "color": "#ef4444"},
-            main_pred_col: {"label": "Weighted Prediction" if main_pred_col=="weighted_rv" else "HAR Prediction", "color": "#3b82f6"},
+            main_pred_col: {
+                "label": "Weighted Prediction" if main_pred_col == "weighted_rv" else "HAR Prediction",
+                "color": "#3b82f6",
+            },
         },
         title="Hourly: Prediction vs True (scaled)",
         y_title="Scaled RV",
@@ -67,7 +67,7 @@ def render_charts(df: pd.DataFrame, weight: float):
             traces={"news_rv": {"label": "News Signal", "color": "#22c55e"}},
             title="News signal (scaled space)",
             y_title="News value",
-            y_range=(-0.1, 0.1),
+            y_range=(-0.5, 0.5),
         )
         st.plotly_chart(fig_news, use_container_width=True)
 

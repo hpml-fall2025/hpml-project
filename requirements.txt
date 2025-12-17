@@ -1,111 +1,39 @@
-# Core ML/DL Dependencies
+# Core ML/DL
 torch>=2.0.0
-transformers==4.57.1
-accelerate==1.12.0
-bitsandbytes==0.48.2
-pytorch-pretrained-bert==0.6.2
-torchao==0.14.1
-
-# Data Science & Analysis
-pandas>=2.2.0
-numpy>=1.26.0
 scipy>=1.10.0
-matplotlib>=3.7.0
-statsmodels>=0.14.0
-scikit-image==0.24.0
-pandas-profiling==3.6.6
+matplotlib
+statsmodels
+yfinance
+transformers==4.57.1
+pandas==2.3.3
+numpy>=1.26.0
+tqdm>=4.65.0
+nltk>=3.8.0
+scikit-learn==1.7.2
 
-# Visualization & Dashboard
+# Dashboard
 streamlit>=1.39.0
-plotly==5.24.1
+plotly>=5.24.0
 
-# Profiling & Monitoring
-memray==1.14.0
-py-spy==0.4.0
-gpustat==1.0.0
-wandb==0.23.1
-tensorboardx==2.6.2.2
-
-# Google Cloud Services
-google-cloud-aiplatform==1.72.0
-google-cloud-artifact-registry==1.13.1
-google-cloud-bigquery-storage==2.27.0
-google-cloud-datastore==1.15.5
-google-cloud-language==2.15.1
-google-cloud-monitoring==2.23.1
-cloud-tpu-client==0.10
-opencensus==0.11.4
-opentelemetry-exporter-otlp==1.27.0
-db-dtypes==1.3.1
-keyrings.google-artifactregistry-auth==1.1.2
-
-# Jupyter & Notebook Tools
-beatrix-jupyterlab==2024.920.84202
-jupyter-http-over-ws==0.0.8
-jupyter-server-proxy==4.4.0
-jupyterlab-git==0.44.0
-jupytext==1.16.4
-notebook-executor==0.2
-ipython-sql==0.5.0
-dataproc-jupyter-plugin==0.1.80
-
-# Web Frameworks & APIs
-fastapi==0.115.5
-uvicorn==0.32.0
+# Flask API
+flask>=2.3.0
 flask-cors==6.0.1
-httptools==0.6.4
-uvloop==0.21.0
-websockets==14.1
-watchfiles==0.24.0
+pytorch-pretrained-bert==0.6.2
 
-# Distributed Computing
-ray==2.39.0
-kfp==2.5.0
+# Notebooks & Visualization
+matplotlib>=3.7.0
+wandb>=0.23.0
+jupyter>=1.0.0
+ipykernel==7.1.0
 
-# CUDA & GPU
-cupy-cuda12x==13.3.0
+# Optional: Quantization (only if experimenting)
+# bitsandbytes>=0.49.0
+# torchao>=0.14.0
 
-# Utilities
-python-dotenv==1.0.1
-textblob==0.19.0
-typer==0.13.1
-absl-py==2.1.0
-docker==7.1.0
-colorful==0.5.6
-inflect==7.3.1
-retrying==1.3.4
-smart-open==7.0.5
-pip-chill==1.0.3
-
-# Compression & Encoding
-brotli==1.1.0
-lz4==4.3.3
-
-# System & Build Tools
-cython==3.0.11
-virtualenv==20.27.1
-mamba==1.5.10
-
-# Networking & HTTP
-aiohttp-cors==0.7.0
-h2==4.1.0
-pyopenssl==24.2.1
-pysocks==1.7.1
-grpcio-status==1.48.2
-
-# Data Validation & Formats
-fqdn==1.5.1
-isoduration==20.11.0
-uri-template==1.3.0
-webcolors==24.11.1
-linkify-it-py==2.0.3
-ruamel.yaml==0.18.6
-
-# Reinforcement Learning
-gymnasium==1.0.0
-dm-tree==0.1.8
-
-# Miscellaneous
+#FinBert Requirements
+backports.tarfile==1.2.0
+importlib-metadata==8.0.0
 jaraco.collections==5.1.0
-
-
+pip-chill==1.0.3
+textblob==0.19.0
+tomli==2.0.1

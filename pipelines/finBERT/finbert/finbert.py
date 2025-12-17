@@ -20,7 +20,6 @@ from peft import LoraConfig, TaskType, get_peft_model
 
 logger = logging.getLogger(__name__)
 
-tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
 
 class Config(object):
     """The configuration class for training."""
@@ -182,6 +181,9 @@ class FinBert(object):
         random.seed(self.config.seed)
         np.random.seed(self.config.seed)
         torch.manual_seed(self.config.seed)
+        if self.device.type == "cuda" and self.n_gpu > 0:
+            torch.cuda.manual_seed_all(self.config.seed)
+
 
         # Set seed for CUDA devices (MPS doesn't have manual_seed_all)
         if self.device.type == "cuda" and self.n_gpu > 0:
@@ -276,15 +278,16 @@ class FinBert(object):
             # apply the discriminative fine-tuning. discrimination rate is governed by dft_rate.
 
             encoder_params = []
-            for i in range(12):
+            num_layers = model.config.num_hidden_layers
+            for i in range(num_layers):
                 encoder_decay = {
                     'params': [p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))],
                     'weight_decay': 0.01,
-                    'lr': lr / (dft_rate ** (12 - i))}
+                    'lr': lr / (dft_rate ** (num_layers - i))}
                 encoder_nodecay = {
                     'params': [p for n, p in param_optimizer if (any(nd in n for nd in no_decay))],
                     'weight_decay': 0.0,
-                    'lr': lr / (dft_rate ** (12 - i))}
+                    'lr': lr / (dft_rate ** (num_layers - i))}
                 encoder_params.append(encoder_decay)
                 encoder_params.append(encoder_nodecay)
 
@@ -457,7 +460,7 @@ class FinBert(object):
 
                 input_ids, attention_mask, token_type_ids, label_ids, agree_ids = batch
 
-                with torch.cuda.amp.autocast(enabled=self.config.use_amp):
+                with torch.amp.autocast('cuda', enabled=self.config.use_amp):
                     logits = model(input_ids, attention_mask, token_type_ids)[0]
                     weights = self.class_weights.to(self.device)
 

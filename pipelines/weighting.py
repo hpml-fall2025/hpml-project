@@ -15,7 +15,7 @@ sd_n = 0.0381
 class Weighting:
     def __init__(
         self,
-        lam: float = 0.1,                 # <-- new: scalar on news
+        lam: float = 0.1,
         warmup_steps: int = 10,
         har_pipe: Optional[VolatilityPipeline] = None,
         news_pipe: Optional[NewsPipeline] = None,

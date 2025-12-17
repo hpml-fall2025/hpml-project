@@ -6,7 +6,7 @@ from collections import deque
 
 from volatility import VolatilityPipeline
 from news import NewsPipeline
-from simple_weighting import SimpleWeighting
+from weighting import Weighting
 
 import logging
 logging.getLogger().setLevel(logging.ERROR)

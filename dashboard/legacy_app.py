@@ -213,7 +213,7 @@ show_har = st.sidebar.toggle("Show HAR-RV", value=True)
 
 st.sidebar.markdown("---")
 live = st.sidebar.toggle("Live update", value=True)
-refresh_every = st.sidebar.slider("Refresh every (seconds)", min_value=0.2, max_value=5.0, value=1.0, step=0.1)
+refresh_every = st.sidebar.slider("Refresh every (seconds)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
 steps = st.sidebar.slider("Iterations per run", min_value=30, max_value=600, value=180, step=10)
 
 

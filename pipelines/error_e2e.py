@@ -100,7 +100,7 @@ def main():
 
     run = wandb.init(
         entity="si2449-columbia-university",
-        project="streaming-e2e",
+        project="Project-Runs",
         name="e2e_error_metrics",
         config=cfg,
     )
@@ -191,7 +191,7 @@ def main():
         "weighted_vs_true/n": m_w["n"],
     })
 
-    def _bar3(key, title, v1, v2, v3, l1="har", l2="news", l3="weighted"):
+    def _bar3(key, title, v1, v2, v3, l1="har-rv only", l2="news only", l3="combined"):
         t = wandb.Table(columns=["model", "value"])
         t.add_data(l1, float(v1))
         t.add_data(l2, float(v2))

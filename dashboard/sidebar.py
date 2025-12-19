@@ -13,7 +13,7 @@ def render_sidebar() -> dict:
 
     refresh_rate = st.sidebar.slider(
         "Refresh Rate (s)",
-        0.2, 5.0, 0.8, 0.1
+        0.1, 0.2, 5.0, 0.8
     )
 
     if st.sidebar.button("🔁 Reset backtest"):

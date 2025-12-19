@@ -96,7 +96,7 @@ def main():
 
     wandb.init(
         entity="si2449-columbia-university",
-        project="streaming-e2e",
+        project="Project-Runs",
         name="e2e_slow_vs_opt_metrics",
         config=cfg,
     )

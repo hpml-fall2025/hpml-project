@@ -115,10 +115,10 @@ def main():
     minute = _load_spy(args.csv)
     rv_hourly = _hourly_rv(minute)
 
-    short_grid = [1, 2, 4, 6, 8, 12]
-    med_grid = [6, 8, 12, 18, 24, 30, 36, 48]
-    long_grid = [24, 30, 48, 72, 96, 120, 168]
-    alpha_grid = [0.0, 1e-8, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0]
+    short_grid = [2, 4, 6, 8, 10]
+    med_grid = [10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32]
+    long_grid = [100, 125, 150, 175, 200, 225, 250, 275, 300, 325, 350, 375, 400]
+    alpha_grid = [0.0, 1e-4, 1e-3, 1e-2, 1e-1, 1.0]
 
     rows = []
     cols = ["RV_hourly", "RV_short", "RV_medium", "RV_long"]
@@ -197,11 +197,14 @@ def main():
     out = out.sort_values(["MSE", "MAE"], ascending=[True, True]).reset_index(drop=True)
     out.to_csv(args.out, index=False)
 
-    print("\nTop 25 by MSE:")
-    print(out.head(25).to_string(index=False))
+    print("\nTop 10 by MSE:")
+    print(out.head(10).to_string(index=False))
 
-    print("\nTop 25 by MAE:")
-    print(out.sort_values("MAE", ascending=True).head(25).to_string(index=False))
+    print("\nTop 10 by MAE:")
+    print(out.sort_values("MAE", ascending=True).head(10).to_string(index=False))
+
+    print("\nTop 10 by R2:")
+    print(out.sort_values("R2", ascending=False).head(10).to_string(index=False))
 
     print(f"\nWrote: {args.out}")
 

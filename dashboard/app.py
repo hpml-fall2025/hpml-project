@@ -21,9 +21,12 @@ from data.store import DataStore
 CFG = {
     "lam": -0.1,
     "delay_hours": 2,
-    "short_h": 1,
-    "med_h": 8,
-    "long_h": 48,
+    "har_short_h": 8,
+    "har_med_h": 12,
+    "har_long_h": 275,
+    "news_short_h": 1,
+    "news_med_h": 8,
+    "news_long_h": 48,
     "k": 10,
     "norm_window": 20,
     "feature_weights": (0.5, 0.3, 0.15, 0.05),
@@ -62,16 +65,16 @@ def _build_hourly_rv_df(har: VolatilityPipeline) -> pd.DataFrame:
 
 def _init_backtest_state():
     har = VolatilityPipeline(
-        short_window_hours=CFG["short_h"],
-        medium_window_hours=CFG["med_h"],
-        long_window_hours=CFG["long_h"],
+        short_window_hours=CFG["har_short_h"],
+        medium_window_hours=CFG["har_med_h"],
+        long_window_hours=CFG["har_long_h"],
     )
 
     news = NewsPipeline(
         use_gpu=True,
-        short_window_hours=CFG["short_h"],
-        medium_window_hours=CFG["med_h"],
-        long_window_hours=CFG["long_h"],
+        short_window_hours=CFG["news_short_h"],
+        medium_window_hours=CFG["news_med_h"],
+        long_window_hours=CFG["news_long_h"],
     )
 
     w = Weighting(

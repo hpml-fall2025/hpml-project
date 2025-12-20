@@ -16,7 +16,7 @@ class VolatilityPipeline(Pipeline):
         medium_window_hours: int = 12,
         long_window_hours: int = 275,
         train_end: Union[str, dt.datetime, pd.Timestamp] = "2021-01-01 23:59:59",
-        stream_lookback_days: int = 31,
+        stream_lookback_days: int = 55,
     ):
         self.model = None
 

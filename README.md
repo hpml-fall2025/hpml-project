@@ -60,6 +60,10 @@ pip install -r requirements.txt
 
 also unzip the SPY1min_clean.csv.zip file to get access to the 1 min intraday data (as it is too large to be committed to the repository)
 
+
+To see more about how to set up the FinBERT pipeline if you'd like to run locally, read our fork of the FinBERT repository here: https://github.com/taimurshaikh/finBERT/tree/master
+
+
 ---
 
 ### B. Wandb Dashboard

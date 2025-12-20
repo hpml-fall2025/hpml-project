@@ -20,21 +20,20 @@ from data.store import DataStore
 
 CFG = {
     "lam": -0.1,
-    "delay_hours": 2,
+    "delay_hours": 0,
     "har_short_h": 8,
     "har_med_h": 12,
     "har_long_h": 275,
-    "news_short_h": 1,
-    "news_med_h": 8,
-    "news_long_h": 48,
-    "k": 10,
-    "norm_window": 20,
-    "feature_weights": (0.5, 0.3, 0.15, 0.05),
+    "news_short_h": 6,
+    "news_med_h": 24,
+    "news_long_h": 75,
+    "k": 0,
+    "feature_weights": (0.0043954775025780105, -0.004191981733214654, -0.06672588362936503, 0.04938762749608129),
     "warmup_steps": 10,
 }
 
-BACKTEST_START = dt.datetime(2021, 1, 5, 10, 0, 0)
-BACKTEST_END   = dt.datetime(2021, 3, 31, 16, 0, 0)  # last plotted hour = 16:00 (3–4pm)
+BACKTEST_START = dt.datetime(2021, 3, 1, 10, 0, 0)
+BACKTEST_END   = dt.datetime(2021, 3, 31, 16, 0, 0)
 
 DEBUG_NEWS = True
 
@@ -56,8 +55,6 @@ def _build_hourly_rv_df(har: VolatilityPipeline) -> pd.DataFrame:
         (rv_df.index <= pd.Timestamp(BACKTEST_END))
     ]
 
-    # STRICT market-hour buckets: keep 09:00..16:00 only.
-    # 09:00 bucket contains 09:30–09:59, 16:00 bucket contains 16:00–16:59 (4-5pm).
     rv_df = rv_df[(rv_df.index.hour >= 9) & (rv_df.index.hour <= 16)]
 
     return rv_df
@@ -85,12 +82,11 @@ def _init_backtest_state():
         feature_weights=CFG["feature_weights"],
         delay_hours=CFG["delay_hours"],
         k=CFG["k"],
-        norm_window=CFG["norm_window"],
     )
 
     rv_df = _build_hourly_rv_df(har)
     if rv_df.empty:
-        raise RuntimeError("Hourly RV df is empty for the requested window (1/4/21–3/31/21).")
+        raise RuntimeError("Hourly RV df is empty for the requested window (3/1/21–3/31/21).")
 
     ts_list = list(rv_df.index)
 
@@ -132,7 +128,6 @@ def main():
     if st.session_state.get("reset_backtest", False) or ("har" not in st.session_state):
         st.session_state.reset_backtest = False
         _init_backtest_state()
-
 
     c1, c2 = st.columns([0.85, 0.15])
     with c2:
@@ -225,7 +220,7 @@ def main():
             weighted_pred = float(w.predict_weighted_vol(tt))
         except Exception:
             weighted_pred = har_pred_scaled
-        
+
         abs_err = abs(weighted_pred - true_scaled)
         har_abs_err = abs(har_pred_scaled - true_scaled)
 

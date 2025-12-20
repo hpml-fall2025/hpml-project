@@ -58,7 +58,6 @@ class VolatilityPipeline(Pipeline):
 
         self.full_hist_data = full_hist
 
-
         self._hour_index = pd.Index(self.full_hist_data.index.floor("h").unique()).sort_values()
 
         train_hist = self.full_hist_data.loc[:pd.Timestamp(self.train_end)]

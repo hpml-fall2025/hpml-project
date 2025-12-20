@@ -1,4 +1,3 @@
-# pipelines/weighting.py
 import numpy as np
 import datetime as dt
 from collections import deque
@@ -7,30 +6,23 @@ from typing import Tuple, Union, Optional
 from pipelines.news import NewsPipeline
 from pipelines.volatility import VolatilityPipeline
 
-mu_h = 0.0463
-sd_h = 0.0179
-mu_n = 0.0116
-sd_n = 0.0381
+mu_h = 0.04556763811529785
+sd_h = 0.020110056862456746
+mu_n = -0.0043576259684375545
+sd_n = 0.0011150798493509803
 
 
 class Weighting:
     def __init__(
         self,
-        lam: float = 0.1,
+        lam: float = -0.1,
         warmup_steps: int = 10,
         har_pipe: Optional[VolatilityPipeline] = None,
         news_pipe: Optional[NewsPipeline] = None,
-        feature_weights: Tuple[float, float, float, float] = (0.5, 0.3, 0.15, 0.05),
+        feature_weights: Tuple[float, float, float, float] = (0.0043954775025780105, -0.004191981733214654, -0.06672588362936503, 0.04938762749608129),
         delay_hours: int = 0,
-        k: int = 10,
-        norm_window: int = 20,
+        k: int = 0,
         eps: float = 1e-8,
-        use_learned_news: bool = False,
-        normalize_news: bool = True,
-        mu_h_: float = mu_h,
-        sd_h_: float = sd_h,
-        mu_n_: float = mu_n,
-        sd_n_: float = sd_n,
     ):
         self.har_pipe = har_pipe if har_pipe is not None else VolatilityPipeline()
         self.news_pipe = news_pipe if news_pipe is not None else NewsPipeline()
@@ -42,24 +34,12 @@ class Weighting:
         self.delay_hours = int(delay_hours)
         self.k = int(k)
 
-        self.norm_window = int(norm_window)
         self.eps = float(eps)
-
-        self.use_learned_news = bool(use_learned_news)
-        self.normalize_news = bool(normalize_news)
-
-        self.mu_h = float(mu_h_)
-        self.sd_h = float(sd_h_)
-        self.mu_n = float(mu_n_)
-        self.sd_n = float(sd_n_)
-
-        self.har_hist = deque(maxlen=self.norm_window)
-        self.news_hist = deque(maxlen=self.norm_window)
 
         self.step = 0
 
     def _normalize_news(self, N_raw: float) -> float:
-        return self.mu_h + (self.sd_h + self.eps) * (float(N_raw) - self.mu_n) / (self.sd_n + self.eps)
+        return mu_h + (sd_h + self.eps) * (float(N_raw) - mu_n) / (sd_n + self.eps)
 
     def predict_weighted_vol(self, when: Union[str, dt.datetime]) -> float:
         H_t, _ = self.har_pipe.predict_har_vol(when)
@@ -70,17 +50,11 @@ class Weighting:
             k=self.k,
             feature_weights=self.feature_weights,
             delay_hours=self.delay_hours,
-            use_learned=self.use_learned_news,
         )
         N_raw = float(N_raw)
 
-        self.har_hist.append(H_t)
-        self.news_hist.append(N_raw)
 
-        if self.normalize_news:
-            N_t = float(self._normalize_news(N_raw))
-        else:
-            N_t = float(N_raw)
+        N_t = float(self._normalize_news(N_raw))
 
         V_t = H_t + self.lam * N_t
 

@@ -72,13 +72,12 @@ View training and evaluation metrics here: https://wandb.ai/si2449-columbia-univ
 
 ---
 
-### C. Specify for Training or For Inference or if Both
+### C. Specify Inference
 
-To train the optimized student model using distillation and LoRA (note: this will take a while):
+Because of the way our project is structured, section C of our readme is the same as the quickstart:
 
-```bash
-python train.py --config configs/distillation_lora.yaml
-```
+Follow the instructions in pipelines/finbert to download the FinBERT model and place it in pipelines/finbert/models/sentiment/pytorch_model.bin.
+Run predict.py to predict volatility for a time.
 
 To run the HAR-RV volatility dashboard:
 
@@ -90,32 +89,27 @@ streamlit run dashboard/app.py
 
 ### D. Evaluation
 
-To evaluate the trained model's throughput and accuracy:
+Evaluation can be found through the following file structures:
 
-```bash
-python eval.py --weights checkpoints/best_student_model.pth --quantization fp16
+dashboard contains all the code/instructions for instantiating the dashboard. This dashboard is used to visualize the FinBERT predicitions, HAR-RV predictions, and the weighted final predictions for volatility.
 
-```
+pipelines contains the code/instructions for the FinBERT and HAR-RV pipelines.
+
+data contains a data management script and a sample csv we test with.
+
+HAR-RV_forecast.ipynb contains exploratory code for visualizing the stock data and experimenting with the HAR-RV models.
 
 ---
 
 ### E. Quickstart: Minimum Reproducible Result
 
-To reproduce our minimum reported result (77.22% accuracy, ~872 samples/s throughput), run:
+Follow the instructions in pipelines/finbert to download the FinBERT model and place it in pipelines/finbert/models/sentiment/pytorch_model.bin.
+Run predict.py to predict volatility for a time.
+
+To run the HAR-RV volatility dashboard:
 
 ```bash
-# Step 1: Set up environment
-pip install -r requirements.txt
-
-# Step 2: Download dataset (Financial PhraseBank / SPY 1-min data)
-bash scripts/download_dataset.sh
-
-# Step 3: Run training (Distilled Student with AMP)
-python train.py --config configs/optimized_finbert.yaml
-
-# Step 4: Evaluate with FP16 weights enabled
-python eval.py --weights checkpoints/best_model.pth --fp16_weights
-
+streamlit run dashboard/app.py
 ```
 
 ---
@@ -123,7 +117,7 @@ python eval.py --weights checkpoints/best_model.pth --fp16_weights
 ## 5. Notes
 
 * All scripts for profiling, training, and integration are located in `scripts/`, `train.py`, `eval.py`, and `configs/`.
-* Trained Models are saved in `models/`.
+* Trained Models are saved in `pipelines/finbert/models/`.
 * **Contact**: si2449@columbia.edu, mnj2122@columbia.edu, srm2245@columbia.edu, ajs2459@columbia.edu, tfs2123@columbia.edu.
 * See our Medium article for a summary of results: "Speeding up sentiment: Building a real-time financial trading pipeline with FinBERT".
 ```

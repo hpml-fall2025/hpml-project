@@ -11,10 +11,11 @@ sd_h = 0.0179
 mu_n = 0.0116
 sd_n = 0.0381
 
+
 class Weighting:
     def __init__(
         self,
-        lam: float = -0.1,
+        lam: float = 0.1,
         warmup_steps: int = 10,
         har_pipe: Optional[VolatilityPipeline] = None,
         news_pipe: Optional[NewsPipeline] = None,

@@ -12,11 +12,11 @@ from pipelines.base import Pipeline
 class VolatilityPipeline(Pipeline):
     def __init__(
         self,
-        short_window_hours: int = 6,
-        medium_window_hours: int = 30,
-        long_window_hours: int = 120,
+        short_window_hours: int = 8,
+        medium_window_hours: int = 12,
+        long_window_hours: int = 375,
         train_end: Union[str, dt.datetime, pd.Timestamp] = "2021-01-01 23:59:59",
-        stream_lookback_days: int = 31,
+        stream_lookback_days: int = 55,
     ):
         self.model = None
 

@@ -18,19 +18,8 @@ from pipelines.volatility import VolatilityPipeline
 from pipelines.weighting import Weighting
 from data.store import DataStore
 
-CFG = {
-    "lam": -0.1,
-    "delay_hours": 2,
-    "short_h": 1,
-    "med_h": 8,
-    "long_h": 48,
-    "k": 10,
-    "norm_window": 20,
-    "feature_weights": (0.5, 0.3, 0.15, 0.05),
-    "warmup_steps": 10,
-}
 
-BACKTEST_START = dt.datetime(2021, 1, 5, 10, 0, 0)
+BACKTEST_START = dt.datetime(2021, 3, 1, 10, 0, 0)
 BACKTEST_END   = dt.datetime(2021, 3, 31, 16, 0, 0)  # last plotted hour = 16:00 (3–4pm)
 
 DEBUG_NEWS = True
@@ -61,29 +50,11 @@ def _build_hourly_rv_df(har: VolatilityPipeline) -> pd.DataFrame:
 
 
 def _init_backtest_state():
-    har = VolatilityPipeline(
-        short_window_hours=CFG["short_h"],
-        medium_window_hours=CFG["med_h"],
-        long_window_hours=CFG["long_h"],
-    )
+    har = VolatilityPipeline()
 
-    news = NewsPipeline(
-        use_gpu=True,
-        short_window_hours=CFG["short_h"],
-        medium_window_hours=CFG["med_h"],
-        long_window_hours=CFG["long_h"],
-    )
+    news = NewsPipeline()
 
-    w = Weighting(
-        lam=CFG["lam"],
-        warmup_steps=CFG["warmup_steps"],
-        har_pipe=har,
-        news_pipe=news,
-        feature_weights=CFG["feature_weights"],
-        delay_hours=CFG["delay_hours"],
-        k=CFG["k"],
-        norm_window=CFG["norm_window"],
-    )
+    w = Weighting(har_pipe=har,news_pipe=news,)
 
     rv_df = _build_hourly_rv_df(har)
     if rv_df.empty:
@@ -174,12 +145,7 @@ def main():
 
         news_err = None
         try:
-            news_val, news_cnt = news.predict_news_vol(
-                tt,
-                k=CFG["k"],
-                feature_weights=CFG["feature_weights"],
-                delay_hours=CFG["delay_hours"],
-            )
+            news_val, news_cnt = news.predict_news_vol(tt)
             news_val = float(news_val)
             news_cnt = int(news_cnt)
         except Exception as e:
@@ -189,7 +155,7 @@ def main():
 
         if DEBUG_NEWS:
             try:
-                prev_hour = news._to_hour(tt) - dt.timedelta(hours=int(CFG["delay_hours"]))
+                prev_hour = news._to_hour(tt)
                 matched = int((news.df["Timestamp_hour"] == prev_hour).sum())
             except Exception:
                 pass
@@ -197,9 +163,9 @@ def main():
         headline = ""
         headline_ts = None
         try:
-            headline = news.get_headline(tt, delay_hours=CFG["delay_hours"])
+            headline = news.get_headline(tt)
             if headline and "No headlines" not in headline:
-                headline_ts = (pd.Timestamp(t).tz_localize(None) - pd.Timedelta(hours=CFG["delay_hours"]))
+                headline_ts = pd.Timestamp(t).tz_localize(None)
         except Exception:
             headline = ""
 

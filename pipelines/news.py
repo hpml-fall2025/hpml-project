@@ -20,8 +20,8 @@ class NewsPipeline(Pipeline):
         self,
         use_gpu: bool = True,
         short_window_hours: int = 6,
-        medium_window_hours: int = 30,
-        long_window_hours: int = 120,
+        medium_window_hours: int = 24,
+        long_window_hours: int = 75,
         stream_lookback_hours: int | None = None,
     ):
         current_file = os.path.abspath(__file__)

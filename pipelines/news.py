@@ -1,3 +1,4 @@
+# pipelines/news.py
 import os
 import sys
 
@@ -8,7 +9,7 @@ sys.path.append(os.path.dirname(current_dir))
 import numpy as np
 import pandas as pd
 import datetime as dt
-from typing import Tuple, Union
+from typing import Tuple, Union, Optional
 
 from finbert.finbert import predict
 from transformers import AutoModelForSequenceClassification
@@ -22,7 +23,7 @@ class NewsPipeline(Pipeline):
         short_window_hours: int = 6,
         medium_window_hours: int = 30,
         long_window_hours: int = 120,
-        stream_lookback_hours: int | None = None,
+        stream_lookback_hours: Optional[int] = None,
     ):
         current_file = os.path.abspath(__file__)
         pipeline_dir = os.path.dirname(current_file)
@@ -71,6 +72,9 @@ class NewsPipeline(Pipeline):
             stream_lookback_hours = int(self.long_window_hours) + 8
         self.stream_lookback_hours = int(stream_lookback_hours)
 
+        self.learned_w: Optional[np.ndarray] = None
+        self.learned_b: float = 0.0
+
         self.reset_stream()
 
     def reset_stream(self):
@@ -88,6 +92,17 @@ class NewsPipeline(Pipeline):
         self._sum_cnt = 0
 
         self._by_hour = {}
+
+    def set_learned_linear(self, w: Union[np.ndarray, Tuple[float, float, float, float]], b: float = 0.0):
+        ww = np.asarray(w, dtype=float).reshape(-1)
+        if ww.shape[0] != 4:
+            raise ValueError("learned w must have length 4 (for [hourly, short, medium, long])")
+        self.learned_w = ww
+        self.learned_b = float(b)
+
+    def clear_learned_linear(self):
+        self.learned_w = None
+        self.learned_b = 0.0
 
     def _to_hour(self, when: Union[str, dt.datetime, pd.Timestamp]) -> pd.Timestamp:
         ts = pd.Timestamp(when)
@@ -190,34 +205,50 @@ class NewsPipeline(Pipeline):
             self._stream_pos += 1
             self._process_hour(pd.Timestamp(self._hour_index[self._stream_pos]))
 
-    def predict_news_vol(
+    def get_feature_row(
         self,
         when: Union[str, dt.datetime],
-        k: int = 25,
-        feature_weights: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
         delay_hours: int = 1,
-    ) -> Tuple[float, int]:
+    ) -> Tuple[np.ndarray, int]:
         target_hour = self._to_hour(when)
         prev_hour = target_hour - pd.Timedelta(hours=int(delay_hours))
 
         self._ensure_stream_until(prev_hour)
 
         if prev_hour not in self._by_hour:
-            return 0.0, 0
+            return np.zeros(4, dtype=float), 0
 
         v, s, m, l, cnt_sum = self._by_hour[prev_hour]
-        if not (np.isfinite(s) and np.isfinite(m) and np.isfinite(l)):
-            return 0.0, int(cnt_sum)
+        return np.array([float(v), float(s), float(m), float(l)], dtype=float), int(cnt_sum)
 
-        row = np.array([float(v), float(s), float(m), float(l)], dtype=float)
+    def predict_news_vol(
+        self,
+        when: Union[str, dt.datetime],
+        k: int = 25,
+        feature_weights: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
+        delay_hours: int = 1,
+        use_learned: bool = False,
+    ) -> Tuple[float, int]:
+        row, n_used = self.get_feature_row(when, delay_hours=delay_hours)
 
-        w = np.array(feature_weights, dtype=float)
+        if not np.isfinite(row).all():
+            return 0.0, int(n_used)
+
+        if not (np.isfinite(row[1]) and np.isfinite(row[2]) and np.isfinite(row[3])):
+            return 0.0, int(n_used)
+
+        if use_learned and (self.learned_w is not None):
+            w = self.learned_w.astype(float)
+            b = float(self.learned_b)
+        else:
+            w = np.array(feature_weights, dtype=float)
+            b = 0.0
+
         ws = float(np.sum(np.abs(w)))
         if ws > 0:
             w = w / ws
 
-        raw_val = float(np.dot(w, row))
-        n_used = int(cnt_sum)
+        raw_val = float(np.dot(w, row) + b)
         conf = (n_used / (n_used + int(k))) if n_used > 0 else 0.0
         return float(conf * raw_val), int(n_used)
 
@@ -236,12 +267,14 @@ class NewsPipeline(Pipeline):
         k: int = 25,
         feature_weights: Tuple[float, float, float, float] = (0.5, 0.3, 0.15, 0.05),
         delay_hours: int = 1,
+        use_learned: bool = False,
     ) -> dict:
         n_vol, n_cnt = self.predict_news_vol(
             when=when,
             k=k,
             feature_weights=feature_weights,
             delay_hours=delay_hours,
+            use_learned=use_learned,
         )
         headline = self.get_headline(when, delay_hours=delay_hours)
         return {"news_rv": float(n_vol), "news_cnt": int(n_cnt), "headline": headline}
